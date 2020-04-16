@@ -17,8 +17,16 @@ creator will be able to endorse others.
 If you are seeking an endorsement, see if you know anyone on this <a href="{{ url_for('user.public_users') }}">list</a> of all seminar organizers and curators.
 </p>
 {% endif %}
-
-{% if seminar.description %}<p>{{ (seminar.show_institutions() + ' ' + (seminar.description | blanknone) + seminar.show_topics()) | safe }}</p>{% endif %}
+{% if seminar.institutions %}
+  <p>
+    {{seminar.show_institutions() | safe}}
+  </p>
+{% endif %}
+{% if seminar.description %}
+  <p>
+    Description: {{(seminar.description | blanknone) + seminar.show_topics() | safe }}
+  </p>
+ {% endif %}
 
 {% if seminar.weekday is not none or seminar.start_time %}<p>{{ seminar.show_weektime_and_duration() }}{% if seminar.timezone != current_user.timezone %} in your time zone, {{ current_user.timezone.replace("_", " ") }}.{% endif %}</p>{% endif %}
 
@@ -35,7 +43,12 @@ If you are seeking an endorsement, see if you know anyone on this <a href="{{ ur
 
 
 
-{% if seminar.comments %}<p>{{ seminar.show_comments() | safe }}</p>{% endif %}
+{% if seminar.comments %}
+  <hr>
+  <p>
+    {{ seminar.show_comments() | safe }}
+  </p>
+{% endif %}
 
 <div class="time_toggler">
   <header class="inner">
@@ -51,7 +64,7 @@ If you are seeking an endorsement, see if you know anyone on this <a href="{{ ur
 </div>
 <div id="future_talks">
   {% if future %}
-  <table>
+  <table class="ntdata">
     <thead>
       <tr>
         {{ talks_header(include_seminar=False) | safe }}
@@ -67,7 +80,7 @@ If you are seeking an endorsement, see if you know anyone on this <a href="{{ ur
 </div>
 {% if past %}
 <div id="past_talks">
-  <table>
+  <table class="ntdata">
     <thead>
       <tr>
         {{ talks_header(include_seminar=False) | safe }}

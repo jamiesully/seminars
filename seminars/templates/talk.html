@@ -2,7 +2,7 @@
 
 {% block content %}
 
-{% if user.email in talk.seminar.editors() or user.is_admin() %}
+{% if user.email in talk.seminar.editors() or user.is_admin %}
 <p>{{ talk.send_speaker_link() | safe }}</p>
 {% endif %}
 
@@ -18,7 +18,7 @@ If you are seeking an endorsement, ask someone on <a href="{{ url_for('user.publ
 </p>
 {% endif %}
 
-<div id="talk-body">
+<div class="talk-body">
   <p>
     {{ talk.show_speaker_and_seminar() | safe }}
   </p>

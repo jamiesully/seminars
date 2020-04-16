@@ -17,9 +17,9 @@ from lmfdb.utils import flash_error
 from lmfdb.backend.utils import DelayCommit, IdentifierWrapper
 from psycopg2.sql import SQL
 import pytz
-from sage.misc.lazy_attribute import lazy_attribute
 from collections import defaultdict
-from datetime import datetime, date
+from datetime import datetime
+from lmfdb.logger import critical
 
 combine = datetime.combine
 
@@ -37,12 +37,14 @@ class WebSeminar(object):
             data = dict(data)
             if data.get("topics") is None:
                 data["topics"] = []
-            if data.get("instructions") is None:
-                data["instructions"] = []
+            if data.get("institutions") is None:
+                data["institutions"] = []
+            if data.get("timezone") is None:
+                data["timesone"] = str(current_user.tz)
         self.new = data is None
         if self.new:
             self.shortname = shortname
-            self.display = current_user.is_creator()
+            self.display = current_user.is_creator
             self.online = True  # default
             self.access = "open"  # default
             self.archived = False  # don't start out archived
@@ -51,8 +53,6 @@ class WebSeminar(object):
             self.per_day = 1
             self.weekday = self.start_time = self.end_time = None
             self.timezone = str(current_user.tz)
-            self.start_date = None
-            self.end_date = None
             for key, typ in db.seminars.col_type.items():
                 if key == "id" or hasattr(self, key):
                     continue
@@ -61,7 +61,8 @@ class WebSeminar(object):
                 elif typ == "text[]":
                     setattr(self, key, [])
                 else:
-                    raise ValueError("Need to update seminar code to account for schema change")
+                    critical("Need to update seminar code to account for schema change key=%s" % key)
+                    setattr(self, key, None)
             if organizer_data is None:
                 organizer_data = [
                     {
@@ -83,6 +84,7 @@ class WebSeminar(object):
                 if data.get("end_time"):
                     data["end_time"] = adapt_datetime(data["end_time"], tz)
             self.__dict__.update(data)
+            # start_time and end_time are datetime.datetimes's (offset from 1/1/2020)
         if organizer_data is None:
             organizer_data = list(
                 db.seminar_organizers.search({"seminar_id": self.shortname}, sort=["order"])
@@ -102,10 +104,11 @@ class WebSeminar(object):
         return not (self == other)
 
     def save(self):
-        assert self.__dict__.get("shortname")
-        db.seminars.insert_many(
-            [{col: getattr(self, col, None) for col in db.seminars.search_cols}]
-        )
+        data = {col: getattr(self, col, None) for col in db.seminars.search_cols}
+        assert data.get("shortname")
+        data["edited_by"] = int(current_user.id)
+        data["edited_at"] = datetime.now(tz=pytz.UTC)
+        db.seminars.insert_many([data])
 
     def save_organizers(self):
         # Need to allow for deleting organizers, so we delete them all then add them back
@@ -117,65 +120,9 @@ class WebSeminar(object):
     # so that we have a well defined conversion between time zone and UTC offset (which
     # is how postgres/psycopg2 stores its time zones).
 
-    # These functions allow a user to specify either start_time or start_timestamp,
-    # end_time or end_timestamp.  The _time versions are time-zone naive, since they're
-    # not tied to a day.
-
-    # We also support not specifying times (though in this case you can't add either time)
-
     @property
     def tz(self):
         return pytz.timezone(self.timezone)
-
-    @lazy_attribute
-    def start_time(self):
-        if self.start_timestamp is None:
-            return None
-        return self.start_timestamp.time()
-
-    @lazy_attribute
-    def end_time(self):
-        if self.end_timestamp is None:
-            return None
-        return self.end_timestamp.time()
-
-    @lazy_attribute
-    def start_timestamp(self):
-        if self.start_time is None:
-            return None
-        return self.tz.localize(combine(date(2020, 1, 1), self.start_time))
-
-    @lazy_attribute
-    def end_timestamp(self):
-        if self.end_time is None:
-            return None
-        return self.tz.localize(combine(date(2020, 1, 1), self.end_time))
-
-    # These functions return time zone aware time objects in either
-    # the user's time zone or the seminar's time zone.
-    # Be careful: the date input is the date of the SEMINAR
-
-    def start_time_seminar(self, date):
-        if self.start_time is None:
-            return None
-        return self.tz.localize(combine(date, self.start_time))
-
-    def end_time_seminar(self, date):
-        if self.end_time is None:
-            return None
-        return self.tz.localize(combine(date, self.end_time))
-
-    def start_time_user(self, date):
-        if self.start_time is None:
-            return None
-        return self.start_time_seminar(date).astimezone(current_user.tz)
-
-    def end_time_user(self, date):
-        if self.end_time is None:
-            return None
-        return self.end_time_seminar(date).astimezone(current_user.tz)
-
-    ## This function
 
     def show_day(self, truncate=True):
         if self.weekday is None:
@@ -190,6 +137,7 @@ class WebSeminar(object):
             return d
 
     def _show_time(self, t, adapt):
+        """ t is a datetime, adapt is a boolean """
         if t:
             if adapt and self.weekday is not None:
                 t = adapt_weektime(t, self.tz, weekday=self.weekday)[1]
@@ -218,13 +166,21 @@ class WebSeminar(object):
         else:
             return ""
 
-    def show_name(self, external=False):
+    def show_name(self, external=False, show_attributes=False):
         # Link to seminar
         kwargs = {"shortname": self.shortname}
         if external:
             kwargs["_external"] = True
             kwargs["_scheme"] = "https"
-        return '<a href="%s">%s</a>' % (url_for("show_seminar", **kwargs), self.name)
+        link = '<a href="%s">%s</a>' % (url_for("show_seminar", **kwargs), self.name)
+        if show_attributes:
+            if not self.display:
+                link += " (hidden)"
+            elif self.archived:
+                link += " (inactive)"
+            elif self.online:
+                link += " (online)"
+        return link
 
     def show_description(self):
         if self.description:
@@ -233,12 +189,12 @@ class WebSeminar(object):
             return ""
 
     def is_subscribed(self):
-        if current_user.is_anonymous():
+        if current_user.is_anonymous:
             return False
         return self.shortname in current_user.seminar_subscriptions
 
     def show_subscribe(self):
-        if current_user.is_anonymous():
+        if current_user.is_anonymous:
             return ""
 
         return toggle(
@@ -266,7 +222,7 @@ class WebSeminar(object):
                     links.append('<a href="%s">%s</a>' % (rec["homepage"], rec["name"]))
                 else:
                     links.append(rec["name"])
-            return "/".join(links)
+            return " / ".join(links)
         else:
             return ""
 
@@ -282,12 +238,13 @@ class WebSeminar(object):
         include_datetime=True,
         include_description=True,
         include_subscribe=True,
+        show_attributes=False,
     ):
         cols = []
         if include_datetime:
             cols.append(('class="day"', self.show_day()))
             cols.append(('class="time"', self.show_start_time()))
-        cols.append(('class="name"', self.show_name()))
+        cols.append(('class="name"', self.show_name(show_attributes=show_attributes)))
         if include_institutions:
             cols.append(('class="institution"', self.show_institutions()))
         if include_description:
@@ -297,15 +254,15 @@ class WebSeminar(object):
         return "".join("<td %s>%s</td>" % c for c in cols)
 
     def editors(self):
-        return [rec["email"] for rec in self.organizer_data if rec["email"]] + [self.owner]
+        return [rec["email"].lower() for rec in self.organizer_data if rec["email"]] + [self.owner.lower()]
 
     def user_can_delete(self):
         # Check whether the current user can delete the seminar
         # See can_edit_seminar for another permission check
         # that takes a seminar's shortname as an argument
         # and returns various error messages if not editable
-        return current_user.is_admin() or (
-            current_user.email_confirmed and current_user.email == self.owner
+        return current_user.is_admin or (
+            current_user.email_confirmed and current_user.email.lower() == self.owner.lower()
         )
 
     def user_can_edit(self):
@@ -313,36 +270,31 @@ class WebSeminar(object):
         # See can_edit_seminar for another permission check
         # that takes a seminar's shortname as an argument
         # and returns various error messages if not editable
-        return current_user.is_admin() or (
-            current_user.email_confirmed and current_user.email in self.editors()
+        return current_user.is_admin or (
+            current_user.email_confirmed and current_user.email.lower() in self.editors()
         )
 
-    def _show_editors(self, label, negate=False):
+    def _show_editors(self, label, curators=False):
+        """ shows organizors (or curators if curators is True) """
         editors = []
         for rec in self.organizer_data:
-            show = rec["curator"]
-            if negate:
-                show = not show
+            show = rec["curator"] if curators else not rec["curator"]
             if show and rec["display"]:
-                name = rec["full_name"]
-                if not name:
-                    if not rec["contact"]:
-                        continue
-                    name = rec["email"]
-                if rec["contact"]:
-                    editors.append('<a href="mailto:%s">%s</a>' % (rec["email"], name))
-                else:
-                    editors.append(name)
+                link = rec["homepage"] if rec["homepage"] else ("mailto:%s"%(rec["email"]) if rec["email"] else "")
+                name = rec["full_name"] if rec["full_name"] else link
+                if name:
+                    editors.append('<a href="%s">%s</a>' % (link, name) if link else name)
+
         if editors:
             return "<tr><td>%s:</td><td>%s</td></tr>" % (label, ", ".join(editors))
         else:
             return ""
 
     def show_organizers(self):
-        return self._show_editors("Organizers", negate=True)
+        return self._show_editors("Organizers")
 
     def show_curators(self):
-        return self._show_editors("Curators")
+        return self._show_editors("Curators", curators=True)
 
     def add_talk_link(self, ptag=True):
         if current_user.email in self.editors():
@@ -413,7 +365,7 @@ def seminars_header(
     if include_description:
         cols.append(('style="min-width:280px;"', "Description"))
     if include_subscribe:
-        if current_user.is_anonymous():
+        if current_user.is_anonymous:
             cols.append(("", ""))
         else:
             cols.append(("", "Saved"))
@@ -526,36 +478,31 @@ def can_edit_seminar(shortname, new):
         flash_error(
             "The identifier must be nonempty and can include only letters, numbers, hyphens and underscores."
         )
-        return redirect(url_for(".index"), 301), None
+        return redirect(url_for(".index"), 302), None
     seminar = seminars_lookup(shortname)
     # Check if seminar exists
     if new != (seminar is None):
         flash_error("Identifier %s %s" % (shortname, "already exists" if new else "does not exist"))
-        return redirect(url_for(".index"), 301), None
-    if (
-        current_user.is_anonymous()
-    ):  # can happen via talks, which don't check for logged in in order to support tokens
+        return redirect(url_for(".index"), 302), None
+    # can happen via talks, which don't check for logged in in order to support tokens
+    if current_user.is_anonymous:
         flash_error(
             "You do not have permission to edit seminar %s.  Please create an account and contact the seminar organizers."
             % shortname
         )
-        return redirect(url_for("show_seminar", shortname=shortname), 301), None
-    if not new and not current_user.is_admin():
-        # Make sure user has permission to edit
-        organizer_data = db.seminar_organizers.lucky(
-            {"seminar_id": shortname, "email": current_user.email}
-        )
-        if organizer_data is None:
-            owner = seminar.owner
-            owner_name = db.users.lucky({"email": owner}, "name")
-            if owner_name:
-                owner = "%s (%s)" % (owner_name, owner)
+        return redirect(url_for("show_seminar", shortname=shortname), 302), None
+    # Make sure user has permission to edit
+    if not new and not seminar.user_can_edit():
+        owner = seminar.owner
+        owner_name = db.users.lucky({"email": owner}, "name")
+        if owner_name:
+            owner = "%s (%s)" % (owner_name, owner)
 
-            flash_error(
-                "You do not have permission to edit seminar %s.  Contact the seminar owner, %s, and ask them to grant you permission."
-                % (shortname, owner)
-            )
-            return redirect(url_for(".index"), 301), None
+        flash_error(
+            "You do not have permission to edit seminar %s.  Contact the seminar owner, %s, and ask them to grant you permission."
+            % (shortname, owner)
+        )
+        return redirect(url_for(".index"), 302), None
     if seminar is None:
         seminar = WebSeminar(shortname, data=None, editing=True)
     return None, seminar

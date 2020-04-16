@@ -401,7 +401,7 @@ def search():
 
 @app.route("/institutions/")
 def list_institutions():
-    section = "Manage" if current_user.is_creator() else None
+    section = "Manage" if current_user.is_creator else None
     return render_template(
         "institutions.html",
         title="Institutions",
@@ -427,7 +427,7 @@ def show_seminar(shortname):
             past.append(talk)
     future.sort(key=lambda talk: talk.start_time)
     past.sort(key=lambda talk: talk.start_time, reverse=True)
-    if current_user.email in seminar.editors() or current_user.is_admin():
+    if current_user.email in seminar.editors() or current_user.is_admin:
         section = "Manage"
     else:
         section = None
@@ -440,6 +440,30 @@ def show_seminar(shortname):
         section=section,
         subsection="view",
         bread=None,
+    )
+
+@app.route("/seminar_raw/<shortname>")
+def show_seminar_raw(shortname):
+    seminar = seminars_lucky({"shortname": shortname})
+    if seminar is None:
+        return render_template("404.html", title="Seminar not found")
+    talks = seminar.talks(projection=3)
+    now = get_now()
+    future = []
+    past = []
+    for talk in talks:
+        if talk.end_time >= now:
+            future.append(talk)
+        else:
+            past.append(talk)
+    future.sort(key=lambda talk: talk.start_time)
+    past.sort(key=lambda talk: talk.start_time, reverse=True)
+    return render_template(
+        "seminar_raw.html",
+        title=seminar.name,
+        future=future,
+        past=past,
+        seminar=seminar
     )
 
 
@@ -461,7 +485,7 @@ def show_talk(semid, talkid):
         menu[2] = (url_for("create.index"), "", "Manage")
         kwds["top_menu"] = menu
     elif (
-        current_user.is_admin()
+        current_user.is_admin
         or current_user.email_confirmed
         and (
             current_user.email in talk.seminar.editors() or current_user.email == talk.speaker_email
@@ -477,22 +501,26 @@ def show_institution(shortname):
     if institution is None:
         return render_template("404.html", title="Institution not found")
     institution = WebInstitution(shortname, data=institution)
-    section = "Manage" if current_user.is_creator() else None
+    section = "Manage" if current_user.is_creator else None
+    query = {"institutions": {"$contains": shortname}}
+    if not current_user.is_admin:
+        query["display"] = True
+    events = list(seminars_search(
+        query, sort=["weekday", "start_time", "name"], organizer_dict=all_organizers(),
+    ))
+    seminars = [S for S in events if not S.is_conference]
+    conferences = [S for S in events if S.is_conference]
+    conferences.sort(key=lambda S:(S.start_date, S.name))
     return render_template(
         "institution.html",
+        seminars=seminars,
+        conferences=conferences,
         title="View institution",
         institution=institution,
         section=section,
         subsection="viewinst",
     )
 
-
-@app.route("/subscribe")
-def subscribe():
-    # redirect to login page if not logged in, with message about what subscription is
-    # If logged in, give a link to download the .ics file, the list of seminars/talks currently followed, and instructions on adding more
-    return render_template("subscribe.html", title="Subscribe", bread=None)
-    raise NotImplementedError
 
 
 @app.route("/info")

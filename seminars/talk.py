@@ -17,6 +17,7 @@ from lmfdb.utils import flash_error
 from markupsafe import Markup
 from psycopg2.sql import SQL
 from icalendar import Event
+from lmfdb.logger import critical
 
 
 class WebTalk(object):
@@ -60,10 +61,9 @@ class WebTalk(object):
                     setattr(self, key, "")
                 elif typ == "text[]":
                     setattr(self, key, [])
-                elif typ == "timestamp with time zone":
-                    setattr(self, key, None)
                 else:
-                    raise ValueError("Need to update talk code to account for schema change")
+                    critical("Need to update talk code to account for schema change key=%s" % key)
+                    setattr(self, key, None)
         else:
             # The output from psycopg2 seems to always be given in the server's time zone
             if data.get("timezone"):
@@ -87,8 +87,11 @@ class WebTalk(object):
         return not (self == other)
 
     def save(self):
-        assert self.__dict__.get("seminar_id") and self.__dict__.get("seminar_ctr")
-        db.talks.insert_many([{col: getattr(self, col, None) for col in db.talks.search_cols}])
+        data = {col: getattr(self, col, None) for col in db.talks.search_cols}
+        assert data.get("seminar_id") and data.get("seminar_ctr")
+        data["edited_by"] = int(current_user.id)
+        data["edited_at"] = datetime.datetime.now(tz=pytz.UTC)
+        db.talks.insert_many([data])
 
     @classmethod
     def _editable_time(cls, t):
@@ -123,20 +126,20 @@ class WebTalk(object):
         Otherwise, show the date only if different from the date of the start time in that time zone.
         """
         # This is used in show_time_and_duration, and needs to include the ending date if different (might not be the same in current user's time zone)
-        t = adapt_datetime(self.end_time, tz)
+        t = adapt_datetime(self.end_time, newtz=tz)
         if tz is not None:
             return t.strftime("%H:%M")
-        t0 = adapt_datetime(self.start_time, tz)
+        t0 = adapt_datetime(self.start_time, newtz=tz)
         if t0.date() == t.date():
             return t.strftime("%H:%M")
         else:
             return t.strftime("%a %b %-d, %H:%M")
 
-    def show_date(self):
+    def show_date(self, tz=None):
         if self.start_time is None:
             return ""
         else:
-            return adapt_datetime(self.start_time).strftime("%a %b %-d")
+            return adapt_datetime(self.start_time, newtz=tz).strftime("%a %b %-d")
 
     def show_time_and_duration(self):
         start = self.start_time
@@ -243,11 +246,11 @@ class WebTalk(object):
             if self.live_link.startswith("http"):
                 success = 'Access <a href="%s">online</a>.' % self.live_link
             else:
-                success = "Livestream comment: %s" % self.live_link
+                success = "Livestream access: %s" % self.live_link
         if self.access == "open":
             return success
         elif self.access == "users":
-            if user.is_anonymous():
+            if user.is_anonymous:
                 return 'To see access link, please <a href="%s">log in</a> (anti-spam measure).' % (
                     url_for("user.info")
                 )
@@ -256,7 +259,7 @@ class WebTalk(object):
             else:
                 return success
         elif self.access == "endorsed":
-            if user.is_creator():
+            if user.is_creator:
                 return success
             else:
                 # TODO: add link to an explanation of endorsement
@@ -265,7 +268,7 @@ class WebTalk(object):
             return ""
 
     def is_subscribed(self):
-        if current_user.is_anonymous():
+        if current_user.is_anonymous:
             return False
         if self.seminar_id in current_user.seminar_subscriptions:
             return True
@@ -288,7 +291,7 @@ class WebTalk(object):
         # that takes a seminar's shortname as an argument
         # and returns various error messages if not editable
         return (
-            current_user.is_admin()
+            current_user.is_admin
             or current_user.email_confirmed
             and (
                 current_user.email in self.seminar.editors()
@@ -317,7 +320,7 @@ class WebTalk(object):
             return False
 
     def show_subscribe(self):
-        if current_user.is_anonymous():
+        if current_user.is_anonymous:
             return ""
 
         value = "{sem}/{ctr}".format(sem=self.seminar_id, ctr=self.seminar_ctr)
@@ -325,10 +328,13 @@ class WebTalk(object):
             tglid="tlg" + value, value=value, checked=self.is_subscribed(), classes="subscribe"
         )
 
-    def oneline(self, include_seminar=True, include_subscribe=True):
+    def oneline(self,
+                include_seminar=True,
+                include_subscribe=True,
+                tz=None):
         cols = []
-        cols.append(('class="date"', self.show_date()))
-        cols.append(('class="time"', self.show_start_time()))
+        cols.append(('class="date"', self.show_date(tz=tz)))
+        cols.append(('class="time"', self.show_start_time(tz=tz)))
         if include_seminar:
             cols.append(('class="seminar"', self.show_seminar()))
         cols.append(('class="speaker"', self.show_speaker(affiliation=False)))
@@ -418,15 +424,15 @@ Email link to speaker
         return event
 
 
-def talks_header(include_seminar=True, include_subscribe=True):
+def talks_header(include_seminar=True, include_subscribe=True, datetime_header="Your time"):
     cols = []
-    cols.append((' colspan="2" class="yourtime"', "Your time"))
+    cols.append((' colspan="2" class="yourtime"', datetime_header))
     if include_seminar:
         cols.append((' class="seminar"', "Seminar"))
     cols.append((' class="speaker"', "Speaker"))
     cols.append((' class="title"', "Title"))
     if include_subscribe:
-        if current_user.is_anonymous():
+        if current_user.is_anonymous:
             cols.append(("", ""))
         else:
             cols.append((' class="saved"', "Saved"))
@@ -454,17 +460,17 @@ def can_edit_talk(seminar_id, seminar_ctr, token):
             seminar_ctr = int(seminar_ctr)
         except ValueError:
             flash_error("Invalid talk id")
-            return redirect(url_for("show_seminar", shortname=seminar_id), 301), None
+            return redirect(url_for("show_seminar", shortname=seminar_id), 302), None
     if seminar_ctr != "":
         talk = talks_lookup(seminar_id, seminar_ctr)
         if talk is None:
             flash_error("Talk does not exist")
-            return redirect(url_for("show_seminar", shortname=seminar_id), 301), None
+            return redirect(url_for("show_seminar", shortname=seminar_id), 302), None
         if token:
             if token != talk.token:
                 flash_error("Invalid token for editing talk")
                 return (
-                    redirect(url_for("show_talk", semid=seminar_id, talkid=seminar_ctr), 301),
+                    redirect(url_for("show_talk", semid=seminar_id, talkid=seminar_ctr), 302),
                     None,
                 )
         else:
@@ -473,7 +479,7 @@ def can_edit_talk(seminar_id, seminar_ctr, token):
                     "You do not have permission to edit talk %s/%s." % (seminar_id, seminar_ctr)
                 )
                 return (
-                    redirect(url_for("show_talk", semid=seminar_id, talkid=seminar_ctr), 301),
+                    redirect(url_for("show_talk", semid=seminar_id, talkid=seminar_ctr), 302),
                     None,
                 )
     else:
@@ -483,7 +489,7 @@ def can_edit_talk(seminar_id, seminar_ctr, token):
         if seminar.new:
             # TODO: This is where you might insert the ability to create a talk without first making a seminar
             flash_error("You must first create the seminar %s" % seminar_id)
-            return redirect(url_for(".edit_seminar", shortname=seminar_id), 301)
+            return redirect(url_for(".edit_seminar", shortname=seminar_id), 302)
         if new:
             talk = WebTalk(seminar_id, seminar=seminar, editing=True)
         else:

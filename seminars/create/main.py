@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 from flask import render_template, request, redirect, url_for, flash
-from flask_login import login_required, current_user
+from flask_login import current_user
 from seminars.users.main import email_confirmed_required
 from seminars import db
 from seminars.create import create
@@ -9,13 +9,16 @@ from seminars.utils import (
     process_user_input,
     check_time,
     weekdays,
+    short_weekdays,
     flash_warning,
     localize_time,
     clean_topics,
     clean_language,
     adapt_datetime,
+    format_errmsg,
+    show_input_errors,
 )
-from seminars.seminar import WebSeminar, can_edit_seminar
+from seminars.seminar import WebSeminar, can_edit_seminar, seminars_search
 from seminars.talk import WebTalk, talks_max, talks_search, talks_lucky, can_edit_talk
 from seminars.institution import (
     WebInstitution,
@@ -26,6 +29,7 @@ from seminars.institution import (
     clean_institutions,
 )
 from seminars.lock import get_lock
+from seminars.users.pwdmanager import ilike_query
 from lmfdb.utils import flash_error
 import datetime
 import pytz
@@ -33,21 +37,39 @@ from collections import defaultdict
 
 SCHEDULE_LEN = 15  # Number of weeks to show in edit_seminar_schedule
 
-
 @create.route("manage/")
-@login_required
 @email_confirmed_required
 def index():
     # TODO: use a join for the following query
-    seminars = []
-    conferences = []
-    for semid in db.seminar_organizers.search({"email": current_user.email}, "seminar_id"):
+    seminars = {}
+    conferences = {}
+    def key(elt):
+        role_key = {'organizer': 0, 'curator': 1, 'creator': 3}
+        return (role_key[elt[1]], elt[0].name)
+
+    for rec in db.seminar_organizers.search({"email": ilike_query(current_user.email)},
+                                            ["seminar_id", "curator"]):
+        semid = rec['seminar_id']
+        role = 'curator' if rec['curator'] else 'organizer'
         seminar = WebSeminar(semid)
+        pair = (seminar, role)
         if seminar.is_conference:
-            conferences.append(seminar)
+            conferences[semid] = pair
         else:
-            seminars.append(seminar)
-    manage = "Manage" if current_user.is_organizer() else "Create"
+            seminars[semid] = pair
+    role = "creator"
+    for semid in seminars_search({"owner": ilike_query(current_user.email)}, "shortname"):
+        if semid not in seminars and semid not in conferences:
+            seminar = WebSeminar(semid)
+            pair = (seminar, role)
+            if seminar.is_conference:
+                conferences[semid] = pair
+            else:
+                seminars[semid] = pair
+    seminars = sorted(seminars.values(), key=key)
+    conferences = sorted(conferences.values(), key=key)
+
+    manage = "Manage" if current_user.is_organizer else "Create"
     return render_template(
         "create_index.html",
         seminars=seminars,
@@ -57,12 +79,11 @@ def index():
         section=manage,
         subsection="home",
         title=manage,
-        user_is_creator=current_user.is_creator(),
+        user_is_creator=current_user.is_creator,
     )
 
 
 @create.route("edit/seminar/", methods=["GET", "POST"])
-@login_required
 @email_confirmed_required
 def edit_seminar():
     if request.method == "POST":
@@ -86,7 +107,7 @@ def edit_seminar():
     lock = get_lock(shortname, data.get("lock"))
     title = "conference" if seminar.is_conference else "seminar"
     title = "Create " + title if new else "Edit " + title + " properties"
-    manage = "Manage" if current_user.is_organizer() else "Create"
+    manage = "Manage" if current_user.is_organizer else "Create"
     return render_template(
         "edit_seminar.html",
         seminar=seminar,
@@ -101,11 +122,10 @@ def edit_seminar():
 
 
 @create.route("delete/seminar/<shortname>")
-@login_required
 @email_confirmed_required
 def delete_seminar(shortname):
     seminar = WebSeminar(shortname)
-    manage = "Manage" if current_user.is_organizer() else "Create"
+    manage = "Manage" if current_user.is_organizer else "Create"
     lock = get_lock(shortname, request.args.get("lock"))
 
     def failure():
@@ -134,7 +154,6 @@ def delete_seminar(shortname):
 
 
 @create.route("delete/talk/<semid>/<semctr>")
-@login_required
 @email_confirmed_required
 def delete_talk(semid, semctr):
     talk = WebTalk(semid, semctr)
@@ -157,14 +176,13 @@ def delete_talk(semid, semctr):
     else:
         if talk.delete():
             flash("Talk deleted")
-            return redirect(url_for(".edit_seminar_schedule", shortname=talk.seminar_id), 301)
+            return redirect(url_for(".edit_seminar_schedule", shortname=talk.seminar_id), 302)
         else:
             flash_error("Only the organizers of a seminar can delete talks in it")
             return failure()
 
 
 @create.route("save/seminar/", methods=["POST"])
-@login_required
 @email_confirmed_required
 def save_seminar():
     raw_data = request.form
@@ -173,25 +191,12 @@ def save_seminar():
     resp, seminar = can_edit_seminar(shortname, new)
     if resp is not None:
         return resp
-
-    def make_error(shortname, col=None, err=None):
-        if err is not None:
-            flash_error("Error processing %s: {0}".format(err), col)
-        seminar = WebSeminar(shortname, data=raw_data)
-        manage = "Manage" if current_user.is_organizer() else "Create"
-        return render_template(
-            "edit_seminar.html",
-            seminar=seminar,
-            title="Edit seminar error",
-            section=manage,
-            institutions=institutions(),
-            lock=None,
-        )
+    errmsgs = []
 
     if seminar.new:
         data = {
             "shortname": shortname,
-            "display": current_user.is_creator(),
+            "display": current_user.is_creator,
             "owner": current_user.email,
             "archived": False,
         }
@@ -205,6 +210,9 @@ def save_seminar():
     data["timezone"] = tz = raw_data.get("timezone")
     tz = pytz.timezone(tz)
 
+    # This seems like a risky hack.  We want to treat start_time/end_time as times of day which will be converted
+    # to timestamps offset from 1/1/2020 by process_user_input whtn the type is "time", but unilaterally converting
+    # all timestamps to times seems risky.  What if we want the user to enter a datetime in the future?
     def replace(a):
         if a == "timestamp with time zone":
             return "time"
@@ -220,7 +228,10 @@ def save_seminar():
             else:
                 data[col] = process_user_input(val, replace(db.seminars.col_type[col]), tz=tz)
         except Exception as err:
-            return make_error(shortname, col, err)
+            errmsgs.append(format_errmsg("Unable to process input %s for %s: {0}".format(err), val, col))
+    for col in ["frequency","per_day"]:
+        if data[col] is not None and data[col] < 1:
+            errmsgs.append(format_errmsg("Unable to process input %s for %s: a positive integer is required", raw_data.get(col), col))
     data["institutions"] = clean_institutions(data.get("institutions"))
     data["topics"] = clean_topics(data.get("topics"))
     data["language"] = clean_language(data.get("language"))
@@ -228,36 +239,51 @@ def save_seminar():
         # Set time zone from institution
         data["timezone"] = WebInstitution(data["institutions"][0]).timezone
     organizer_data = []
+    display_count = email_count = 0
     for i in range(10):
         D = {"seminar_id": seminar.shortname}
         for col in db.seminar_organizers.search_cols:
             if col in D:
                 continue
             name = "org_%s%s" % (col, i)
+            typ = db.seminar_organizers.col_type[col]
             try:
                 val = raw_data.get(name)
                 if val == "":
                     D[col] = None
                 elif val is None:
-                    D[col] = False  # checkboxes
+                    D[col] = False if type == "boolean" else None  # checkboxes
                 else:
-                    D[col] = process_user_input(val, db.seminar_organizers.col_type[col], tz=tz)
+                    D[col] = process_user_input(val, typ, tz=tz)
                 # if col == 'homepage' and val and not val.startswith("http"):
                 #     D[col] = "http://" + data[col]
             except Exception as err:
-                return make_error(shortname, col, err)
-        if D.get("email") or D.get("full_name"):
+                errmsgs.append(format_errmsg("Unable to process input %s for %s: {0}".format(err), val, col))
+        if D.get("homepage") or D.get("email") or D.get("full_name"):
+            if not D.get("full_name"):
+                errmsgs.append(format_errmsg("Organizer %s cannot be blank", "name"))
             D["order"] = len(organizer_data)
-            ####### HOT FIX ####################
-            # WARNING the header on the template
-            # says organizer and we have agreed
-            # that one is either an organizer or
-            # a curator
+            # WARNING the header on the template says organizer
+            # but it sets the database column curator, so the 
+            # boolean needs to be inverted
             D["curator"] = not D["curator"]
+            if D["display"]:
+                display_count += 1
+            if D["email"]:
+                email_count += 1
             organizer_data.append(D)
+    if display_count == 0:
+       errmsgs.append(format_errmsg("At least one organizer or curator must be displayed."))
+    if email_count == 0:
+       errmsgs.append(format_errmsg("At least one organizer or curator needs %s set to ensure that someone can maintain this listing.<br>%s", "email",
+                                    "Note that the email will not be public if homepage is set or display is not checked, it is used only to identify the organizer."))
+    # Don't try to create new_version using invalid input
+    if errmsgs:
+        return show_input_errors(errmsgs)
     new_version = WebSeminar(shortname, data=data, organizer_data=organizer_data)
     if check_time(new_version.start_time, new_version.end_time):
-        return make_error(shortname)
+        errmsgs.append(format_errmsg("Incompatible or invalid start time %s and end time %s", new_version.start_time, new_version.end_time))
+        return show_input_errors(errmsgs)
     if seminar.new or new_version != seminar:
         new_version.save()
         edittype = "created" if new else "edited"
@@ -268,11 +294,10 @@ def save_seminar():
         new_version.save_organizers()
         if not seminar.new:
             flash("Seminar organizers updated!")
-    return redirect(url_for(".edit_seminar", shortname=shortname), 301)
+    return redirect(url_for(".edit_seminar", shortname=shortname), 302)
 
 
 @create.route("edit/institution/", methods=["GET", "POST"])
-@login_required
 @email_confirmed_required
 def edit_institution():
     if request.method == "POST":
@@ -300,7 +325,6 @@ def edit_institution():
 
 
 @create.route("save/institution/", methods=["POST"])
-@login_required
 @email_confirmed_required
 def save_institution():
     raw_data = request.form
@@ -350,14 +374,14 @@ def save_institution():
         new_version.save()
         edittype = "created" if new else "edited"
         flash("Institution %s successfully!" % edittype)
-    return redirect(url_for(".edit_institution", shortname=shortname), 301)
+    return redirect(url_for(".edit_institution", shortname=shortname), 302)
 
 
 @create.route("edit/talk/<seminar_id>/<seminar_ctr>/<token>")
 def edit_talk_with_token(seminar_id, seminar_ctr, token):
     # For emailing, where encoding ampersands in a mailto link is difficult
     return redirect(
-        url_for(".edit_talk", seminar_id=seminar_id, seminar_ctr=seminar_ctr, token=token), 301,
+        url_for(".edit_talk", seminar_id=seminar_id, seminar_ctr=seminar_ctr, token=token), 302,
     )
 
 
@@ -391,7 +415,7 @@ def edit_talk():
             start_time = localize_time(datetime.datetime.combine(date, start_time), tz)
             end_time = localize_time(datetime.datetime.combine(date, end_time), tz)
         except ValueError:
-            return redirect(url_for(".edit_seminar_schedule", shortname=talk.seminar_id), 301)
+            return redirect(url_for(".edit_seminar_schedule", shortname=talk.seminar_id), 302)
         talk.start_time = start_time
         talk.end_time = end_time
     # lock = get_lock(seminar_id, data.get("lock"))
@@ -419,22 +443,7 @@ def save_talk():
     )
     if resp is not None:
         return resp
-
-    def make_error(talk, col=None, err=None):
-        if err is not None:
-            flash_error("Error processing %s: {0}".format(err), col)
-        talk = WebTalk(talk.seminar_id, talk.seminar_ctr, data=raw_data)
-        title = "Create talk error" if talk.new else "Edit talk error"
-        return render_template(
-            "edit_talk.html",
-            talk=talk,
-            seminar=talk.seminar,
-            title=title,
-            section="Manage",
-            subsection="edittalk",
-            institutions=institutions(),
-            timezones=timezones,
-        )
+    errmsgs = []
 
     data = {
         "seminar_id": talk.seminar_id,
@@ -467,12 +476,16 @@ def save_talk():
             if col == "access" and val not in ["open", "users", "endorsed"]:
                 raise ValueError("Invalid access type")
         except Exception as err:
-            return make_error(talk, col, err)
+            errmsgs.append(format_errmsg("Unable to process input %s for %s: {0}".format(err), val, col))
     data["topics"] = clean_topics(data.get("topics"))
     data["language"] = clean_language(data.get("language"))
+    # Don't try to create new_version using invalid input
+    if errmsgs:
+        return show_input_errors(errmsgs)
     new_version = WebTalk(talk.seminar_id, data["seminar_ctr"], data=data)
-    if check_time(new_version.start_time, new_version.end_time):
-        return make_error(talk)
+    if check_time(new_version.start_time, new_version.end_time, check_past=True):
+        errmsgs.append(format_errmsg("Incompatible or invalid start time %s and end time %s", new_version.start_time, new_version.end_time))
+        return show_input_errors(errmsgs)
     if new_version == talk:
         flash("No changes made to talk.")
     else:
@@ -484,40 +497,48 @@ def save_talk():
         edit_kwds["token"] = token
     else:
         edit_kwds.pop("token", None)
-    return redirect(url_for(".edit_talk", **edit_kwds), 301)
+    return redirect(url_for(".edit_talk", **edit_kwds), 302)
 
 
 def make_date_data(seminar, data):
+    tz = seminar.tz
     def parse_date(key):
         date = data.get(key)
         if date:
             try:
-                return process_user_input(date, "date", seminar.tz)
+                return process_user_input(date, "date", tz)
             except ValueError:
                 pass
     begin = parse_date("begin")
     end = parse_date("end")
-    shortname = seminar.shortname
-    day = datetime.timedelta(days=1)
-    today = datetime.datetime.now(tz=pytz.timezone(seminar.timezone)).date()
-    if begin is None or seminar.start_time is None or seminar.end_time is None:
-        future_talk = talks_lucky(
-            {"seminar_id": shortname, "start_time": {"$exists": True, "$gte": today}}, sort=["start_time"]
-        )
-        last_talk = talks_lucky(
-            {"seminar_id": shortname, "start_time": {"$exists": True, "$lt": today}}, sort=[("start_time", -1)],
-        )
-
     frequency = data.get("frequency")
     try:
         frequency = int(frequency)
     except Exception:
         frequency = None
-    if not frequency:
+    if not frequency or frequency < 0:
         frequency = seminar.frequency
-        if not frequency:
+        if not frequency or frequency < 0:
             frequency = 1 if seminar.is_conference else 7
-    query = {}
+    try:
+        weekday = short_weekdays.index(data.get("weekday", "")[:3])
+    except ValueError:
+        weekday = None
+    if weekday is None:
+        weekday = seminar.weekday
+    shortname = seminar.shortname
+    day = datetime.timedelta(days=1)
+    now = datetime.datetime.now(tz=tz)
+    today = now.date()
+    midnight_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if begin is None or seminar.start_time is None or seminar.end_time is None:
+        future_talk = talks_lucky(
+            {"seminar_id": shortname, "start_time": {"$exists": True, "$gte": midnight_today}}, sort=["start_time"]
+        )
+        last_talk = talks_lucky(
+            {"seminar_id": shortname, "start_time": {"$exists": True, "$lt": midnight_today}}, sort=[("start_time", -1)],
+        )
+
     if begin is None:
         if seminar.is_conference:
             if seminar.start_date:
@@ -525,11 +546,9 @@ def make_date_data(seminar, data):
             else:
                 begin = today
         else:
-            if seminar.weekday is not None and frequency == 7:
+            if weekday is not None and frequency == 7:
                 begin = today
-                # Weekly meetings: take the next one
-                while begin.weekday() != seminar.weekday:
-                    begin += day
+                # Will set to next weekday below
             else:
                 # Try to figure out a plan from future and past talks
                 if future_talk is None:
@@ -545,6 +564,10 @@ def make_date_data(seminar, data):
                     while begin >= today:
                         begin -= frequency * day
                     begin += frequency * day
+    if not seminar.is_conference and seminar.weekday is not None:
+        # Weekly meetings: take the next one
+        while begin.weekday() != weekday:
+            begin += day
     if end is None:
         if seminar.is_conference:
             if seminar.end_date:
@@ -561,38 +584,39 @@ def make_date_data(seminar, data):
     seminar.frequency = frequency
     data["begin"] = seminar.show_input_date(begin)
     data["end"] = seminar.show_input_date(end)
+    midnight_begin = localize_time(datetime.datetime.combine(begin, datetime.time()), tz)
+    midnight_end = localize_time(datetime.datetime.combine(end, datetime.time()), tz)
     # add a day since we want to allow talks on the final day
     if end < begin:
         # Only possible by user input
         frequency = -frequency
-        query = {"$gte": end, "$lt": begin + day}
+        query = {"$gte": midnight_end, "$lt": midnight_begin + day}
     else:
-        query = {"$gte": begin, "$lt": end + day}
+        query = {"$gte": midnight_begin, "$lt": midnight_end + day}
     schedule_days = [begin + i * frequency * day for i in range(schedule_len)]
     scheduled_talks = list(
         talks_search({"seminar_id": shortname, "start_time": query})
     )
     by_date = defaultdict(list)
     for T in scheduled_talks:
-        by_date[adapt_datetime(T.start_time, seminar.tz).date()].append(T)
+        by_date[adapt_datetime(T.start_time, tz).date()].append(T)
     all_dates = sorted(set(schedule_days + list(by_date)), reverse=(end < begin))
     # Fill in by_date with Nones up to the per_day value
     for date in all_dates:
         by_date[date].extend([None] * (seminar.per_day - len(by_date[date])))
     if seminar.start_time is None:
         if future_talk is not None and future_talk.start_time:
-            seminar.start_time = future_talk.start_time.time()
+            seminar.start_time = future_talk.start_time
         elif last_talk is not None and last_talk.start_time:
-            seminar.start_time = last_talk.start_time.time()
+            seminar.start_time = last_talk.start_time
     if seminar.end_time is None:
         if future_talk is not None and future_talk.start_time:
-            seminar.end_time = future_talk.end_time.time()
+            seminar.end_time = future_talk.end_time
         elif last_talk is not None and last_talk.start_time:
-            seminar.end_time = last_talk.end_time.time()
+            seminar.end_time = last_talk.end_time
     return seminar, all_dates, by_date
 
 @create.route("edit/schedule/", methods=["GET", "POST"])
-@login_required
 @email_confirmed_required
 def edit_seminar_schedule():
     # It would be good to have a version of this that worked for a conference, but that's a project for later
@@ -624,7 +648,6 @@ optional_cols = ["speaker_affiliation", "speaker_email", "title"]
 
 
 @create.route("save/schedule/", methods=["POST"])
-@login_required
 @email_confirmed_required
 def save_seminar_schedule():
     raw_data = request.form
@@ -635,9 +658,6 @@ def save_seminar_schedule():
     frequency = raw_data.get("frequency")
     try:
         frequency = int(frequency)
-        if frequency != seminar.frequency and frequency > 0:
-            seminar.frequency = frequency
-            seminar.save()
     except Exception:
         pass
     schedule_count = int(raw_data["schedule_count"])
@@ -667,7 +687,7 @@ def save_seminar_schedule():
                 date = process_user_input(date, "date", tz=seminar.tz)
             except ValueError as err:
                 flash_error("invalid date %s: {0}".format(err), date)
-                redirect(url_for(".edit_seminar_schedule", shortname=shortname, **raw_data), 301)
+                redirect(url_for(".edit_seminar_schedule", shortname=shortname, **raw_data), 302)
         else:
             date = None
         time_input = raw_data.get("time%s" % i, "").strip()
@@ -681,16 +701,19 @@ def save_seminar_schedule():
                 # TODO: clean this up
                 start_time = process_user_input(time_split[0], "time", seminar.tz).time()
                 end_time = process_user_input(time_split[1], "time", seminar.tz).time()
+                if check_time(start_time, end_time):
+                    raise ValueError
             except ValueError as err:
-                flash_error("invalid time range %s: {0}".format(err), time_input)
-                return redirect(url_for(".edit_seminar_schedule", **raw_data), 301)
+                if str(err):
+                    flash_error("invalid time range %s: {0}".format(err), time_input)
+                return redirect(url_for(".edit_seminar_schedule", **raw_data), 302)
         else:
             start_time = end_time = None
         if any(X is None for X in [start_time, end_time, date]):
             flash_error(
                 "You must give a date, start and end time for %s" % speaker
             )
-            return redirect(url_for(".edit_seminar_schedule", **raw_data), 301)
+            return redirect(url_for(".edit_seminar_schedule", **raw_data), 302)
         if seminar_ctr:
             # existing talk
             seminar_ctr = int(seminar_ctr)
@@ -722,12 +745,12 @@ def save_seminar_schedule():
             url_for(
                 ".edit_talk", seminar_id=shortname, seminar_ctr=int(raw_data.get("detailctr")),
             ),
-            301,
+            302,
         )
     else:
         if updated or ctr > curmax + 1:
             flash("%s talks updated, %s talks created" % (updated, ctr - curmax - 1))
         if warned:
-            return redirect(url_for(".edit_seminar_schedule", **raw_data), 301)
+            return redirect(url_for(".edit_seminar_schedule", **raw_data), 302)
         else:
-            return redirect(url_for(".edit_seminar_schedule", shortname=shortname), 301)
+            return redirect(url_for(".edit_seminar_schedule", shortname=shortname, begin=raw_data.get('begin'), end=raw_data.get('end'), frequency=raw_data.get('frequency'), weekday=raw_data.get('weekday')), 302)
