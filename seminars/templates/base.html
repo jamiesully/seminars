@@ -5,25 +5,21 @@
     <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
     <meta name="description" content="{{meta_description|striptags}}"/>
     {% if titletag %}
-      <title>Math seminars - {{ titletag|striptags }}</title>
+      <title>{{ topdomain }} - {{ titletag|striptags }}</title>
     {% else %}
-      <title>Math seminars{% if title %} - {{ title|striptags }}{% endif %}  </title>
+      <title>{{ topdomain }}{% if title %} - {{ title|striptags }}{% endif %}  </title>
     {% endif %}
   <script>
   if (navigator.cookieEnabled) {
     console.log("cookies enabled");
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
     if( document.cookie.includes('browser_timezone') ) {
-      //console.log("has cookie");
-      console.log(document.cookie);
     } else {
-      document.cookie = "browser_timezone=" + tz + ";path=/"
-      //console.log("adding cookie");
-      //console.log(document.cookie);
+      document.cookie = "browser_timezone=" + tz + ";path=/";
       location.reload();
     }
     } else {
-      //console.log("cookies disabled");
+      console.log("cookies disabled");
   }
   </script>
     <link id="style_css" href="{{ url_for('css') }}" rel="stylesheet" type="text/css" />
@@ -64,16 +60,18 @@
           href="https://ajax.googleapis.com/ajax/libs/jqueryui/1.12.1/themes/smoothness/jquery-ui.css"
           integrity="sha384-Nlo8b0yiGl7Dn+BgLn4mxhIIBU6We7aeeiulNCjHdUv/eKHx59s3anfSUjExbDxn"
           crossorigin="anonymous">
-    <!--FIXME pick version and add integrity-->
-    <script type="text/javascript" src="https://cdn.jsdelivr.net/momentjs/latest/moment.min.js"></script>
-    <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/daterangepicker/daterangepicker.min.js"></script>
-    <link rel="stylesheet" type="text/css" href="https://cdn.jsdelivr.net/npm/daterangepicker/daterangepicker.css" />
-    <script src="https://unpkg.com/select-pure@latest/dist/bundle.min.js"></script>
+
+    <!-- date range picker https://github.com/dangrossman/daterangepicker -->
+    <script type="text/javascript" src="{{ url_for('static', filename='daterangepicker/moment.min.js') }}"></script>
+    <script type="text/javascript" src="{{ url_for('static', filename='daterangepicker/daterangepicker.min.js') }}"></script>
+    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='daterangepicker/daterangepicker.css') }}" />
+
+    <!-- multi select https://github.com/dudyn5ky1/select-pure -->
+    <script type="text/javascript" src="{{ url_for('static', filename='select-pure/dist/bundle.min.js') }}"></script>
     <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='select_pure.css') }}" />
 
-    <!-- for ics ical and google calendar logos -->
-    <script src="https://kit.fontawesome.com/7144df9805.js"></script>
-
+    <!-- for ics, ical, google calendar and select-pure x icons -->
+    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='fontawesome/css/all.min.css') }}"/>
 
     <!-- notifications -->
     <script type="text/javascript" src="{{ url_for('static', filename='notify.min.js') }}"></script>
@@ -154,7 +152,7 @@ katexOpts = {
     <script type="text/javascript">
 var _gaq = _gaq || [];
 _gaq.push(['_setAccount', 'UA-162873686-1']);
-_gaq.push(['_setDomainName', 'mathseminars.org']);
+_gaq.push(['_setDomainName', '{{ topdomain }}']);
 _gaq.push(['_setAllowLinker', true]);
 _gaq.push(['_trackPageview']);
 _gaq.push(['_trackPageLoadTime']);
@@ -165,11 +163,18 @@ ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www')
 var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
 })();
     </script>
+
+
+
+
   </head>
 
   <body class="{{ body_class }}">
 {% macro KNOWL(kid, title=none) -%}
 {{ static_knowl(kid, title) | safe }}
+{%- endmacro %}
+{% macro ASTKNOWL(kid, title=none) -%}
+{{ static_knowl(kid, title) | safe }}<span style="color:red; font-weight:normal">*</span>
 {%- endmacro %}
     {% block body -%}{%- endblock body %}
   </body>

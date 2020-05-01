@@ -28,6 +28,7 @@ console.log('Form is unchanged!');
     <div class="right">
       <div class="upper">
         <div id="title">{{ title|safe }}</div>
+        <div id="domain"> {{ topdomain }} {% if 'mathseminars' in topdomain  %}(beta){% else %}(test){%endif%}</div>
         <div id="top-menu">
         {% for url, onclick, label in top_menu -%}
           <div {% if section == label %} class="menu-active"{% endif %}><a href="{{url}}"{% if onclick %} onclick="{{onclick}}"{% endif %}>{{label}}</a></div>
@@ -45,22 +46,67 @@ console.log('Form is unchanged!');
 </div>
 
 {% if section == "Browse" %}
+  <div id="subject-filter-menu">
+    <span id="close-subject-btn" onclick="toggleFilterView(this.id);"><i class="fa fa-times close"></i></span>
+    {% for ab, name in subjects %}
+      <div class="subject_toggle" id="subjectlink-{{ab}}">
+        {{name}}
+        {% if subject_counts[ab] %} ({{subject_counts[ab]}}) {% endif %}
+      </div>
+    {% endfor %}
+  </div>
+
   <div id="topic-filter-menu">
+    {% if topdomain == "mathseminars.org" %}
+    {% for ab, name, topic_subject in topics %}
+    {% if topic_subject == "math" %}
+    <div class="topic_toggle subject-math" id="topiclink-math_{{ab}}">
+      {{name}}
+      {% if topic_counts["math_"+ab] %} ({{topic_counts["math_"+ab]}}){% endif %}
+    </div>
+    {% endif %}
+    {% endfor %}
     <div id="topic-filter-head">
-      {% for ab, name, onclick in [("ALL", "Select all", "selectAllTopics();"), ("CLR", "Clear all", "clearAllTopics();")] %}
-      <div class="topic_cmd" id="topiclink-{{ab}}" onclick="{{onclick}}">
+      {% for ab, name, onclick in [("ALL", "Select all", "selectAllTopics('math');"), ("CLR", "Clear all", "clearAllTopics('math');")] %}
+      <div class="topic_cmd" id="topiclink-math_{{ab}}" onclick="{{onclick}}">
         {{name}}
       </div>
       {% endfor %}
     </div>
-    {% for ab, name in topics %}
-      <div class="topic_toggle" id="topiclink-{{ab}}">
-        {{name}}{% if topic_counts[ab] %} ({{topic_counts[ab]}}){% endif %}
+    {% else %}
+    <div id="subjects-tabs">
+      <ul class="tab-subject-nav">
+        <li><span id="close-topic-btn" onclick="toggleFilterView(this.id);"><i class="fa fa-times close"></i></span></li>
+        {% for ab, name in subjects %}
+          <li><a href="#tab-{{ab}}-content" class="tab-subject-nav">{{name}}</a></li>
+        {% endfor %}
+      </ul>
+
+     {% for subject_ab, subject_name in subjects %}
+       <div id="tab-{{subject_ab}}-content" class="tab-subject-panel">
+         {% for ab, name, topic_subject in topics %}
+           {% if topic_subject == subject_ab %}
+             <div class="topic_toggle subject-{{topic_subject}}" id="topiclink-{{subject_ab}}_{{ab}}">
+               {{name}}
+               {% if topic_counts[subject_ab+"_"+ab] %} ({{topic_counts[subject_ab+"_"+ab]}}){% endif %}
+             </div>
+           {% endif %}
+         {% endfor %}
+         <div id="topic-filter-head">
+          {% for ab, name, onclick in [("ALL", "Select all", "selectAllTopics('"+subject_ab+"');"), ("CLR", "Clear all", "clearAllTopics('"+subject_ab+"');")] %}
+            <div class="topic_cmd" id="topiclink-{{subject_ab}}_{{ab}}" onclick="{{onclick}}">
+              {{name}}
+            </div>
+          {% endfor %}
+         </div>
       </div>
     {% endfor %}
     </div>
+    {% endif %}
   </div>
+
   <div id="language-filter-menu">
+    <span id="close-language-btn" onclick="toggleFilterView(this.id);"><i class="fa fa-times close"></i></span>
     {% for ab, name in languages %}
       <div class="language_toggle" id="langlink-{{ab}}">
         {{name}} ({{language_counts[ab]}})
@@ -73,7 +119,7 @@ console.log('Form is unchanged!');
       <div class="submenu-inner">
         {% if user.is_creator %}
           <div class="submenu-nav{% if subsection == 'home' %} submenu-active{% endif %}">
-            <a href="{{ url_for('create.index') }}">Seminars</a>
+            <a href="{{ url_for('create.index') }}">Series</a>
           </div>
           {% if not subsection in ['view', 'editsem', 'schedule', 'viewtalk', 'edittalk'] %}
             <div class="submenu-nav{% if subsection == 'institutions' %} submenu-active{% endif %}">
@@ -97,25 +143,25 @@ console.log('Form is unchanged!');
             </div>
           {% endif %} {# seminar.new #}
           <div class="submenu-nav{% if subsection == 'editsem' %} submenu-active{% endif %}">
-            <a href="{{ url_for('create.edit_seminar', shortname=seminar.shortname) }}">{% if seminar.new %}Create{% else %}Edit{% endif %} {% if subsection in ['edittalk', 'viewtalk'] %}seminar{% else %}properties{% endif %}</a>
+            <a href="{{ url_for('create.edit_seminar', shortname=seminar.shortname) }}">{% if seminar.new %}Create{% else %}Edit{% endif %} {% if subsection in ['edittalk', 'viewtalk'] %}series{% else %}properties{% endif %}</a>
           </div>
           <div class="submenu-nav{% if subsection == 'view' %} submenu-active{% endif %}">
-            <a href="{{ url_for('show_seminar', shortname=seminar.shortname) }}">View seminar</a>
+            <a href="{{ url_for('show_seminar', shortname=seminar.shortname) }}">View series</a>
           </div>
         {% endif %} {# institution/seminar #}
         {% if talk %}
-          <div class="submenu-nav{% if subsection == 'viewtalk' %} submenu-active{% endif %}">
-            {% if talk.seminar.user_can_edit() %}
-              <a href="{{ url_for('show_talk', semid=talk.seminar.shortname, talkid=talk.seminar_ctr) }}">View talk</a>
-            {% else %}
-              <a href="{{ url_for('show_talk', semid=talk.seminar.shortname, talkid=talk.seminar_ctr, token=token) }}">View talk</a>
-            {% endif %}
-          </div>
           <div class="submenu-nav{% if subsection == 'edittalk' %} submenu-active{% endif %}">
             {% if talk.seminar.user_can_edit() %}
             <a href="{{ url_for('create.edit_talk', seminar_id=talk.seminar.shortname, seminar_ctr=talk.seminar_ctr) }}">Edit talk</a>
             {% else %}
             <a href="{{ url_for('create.edit_talk', seminar_id=talk.seminar.shortname, seminar_ctr=talk.seminar_ctr, token=token) }}">Edit talk</a>
+            {% endif %}
+          </div>
+          <div class="submenu-nav{% if subsection == 'viewtalk' %} submenu-active{% endif %}">
+            {% if talk.seminar.user_can_edit() %}
+              <a href="{{ url_for('show_talk', semid=talk.seminar.shortname, talkid=talk.seminar_ctr) }}">View talk</a>
+            {% else %}
+              <a href="{{ url_for('show_talk', semid=talk.seminar.shortname, talkid=talk.seminar_ctr, token=token) }}">View talk</a>
             {% endif %}
           </div>
         {% endif %} {# talk #}
@@ -132,6 +178,12 @@ console.log('Form is unchanged!');
         <div class="submenu-nav{% if subsection == 'faq' %} submenu-active{% endif %}">
           <a href="{{ url_for('faq') }}">FAQ</a>
         </div>
+        <div class="submenu-nav{% if subsection == 'policies' %} submenu-active{% endif %}">
+          <a href="{{ url_for('policies') }}">Policies</a>
+        </div>
+        <div class="submenu-nav{% if subsection == 'privacy' %} submenu-active{% endif %}">
+          <a href="{{ url_for('privacy') }}">Privacy</a>
+        </div>
         <div class="submenu-nav{% if subsection == 'acknowledgments' %} submenu-active{% endif %}">
           <a href="{{ url_for('acknowledgment') }}">Acknowledgments</a>
         </div>
@@ -145,6 +197,7 @@ console.log('Form is unchanged!');
 <noscript>
   <div id="javascript-explanation">
     We use javascript to filter seminar topics, adapt seminars to your local time zone, enter date ranges, and hide this annoying message.
+    We use cookies to set your default timezone, keep track of your preferences, and to keep you logged in.
   </div>
 </noscript>
 

@@ -2,6 +2,7 @@ from flask import redirect, url_for
 from flask_login import current_user
 from seminars import db
 from seminars.utils import allowed_shortname
+from seminars.users.pwdmanager import userdb
 from lmfdb.utils import flash_error
 from collections.abc import Iterable
 from lmfdb.logger import critical
@@ -46,7 +47,7 @@ def clean_institutions(inp):
 
 def institution_known(institution):
     matcher = {"$like": "%{0}%".format(institution)}
-    return db.institutions.count({"$or": [{"shortname": matcher}, {"aliases": matcher}]}) > 0
+    return db.institutions.count({"$or": [{"shortname": matcher}, {"name": matcher}, {"aliases": matcher}]}) > 0
 
 
 class WebInstitution(object):
@@ -69,7 +70,9 @@ class WebInstitution(object):
                 elif typ == "text[]":
                     setattr(self, key, [])
                 else:
-                    critical("Need to update institution code to account for schema change key=%s" % key)
+                    critical(
+                        "Need to update institution code to account for schema change key=%s" % key
+                    )
                     setattr(self, key, None)
         else:
             self.__dict__.update(data)
@@ -81,6 +84,7 @@ class WebInstitution(object):
         return isinstance(other, WebInstitution) and all(
             getattr(self, key, None) == getattr(other, key, None)
             for key in db.institutions.search_cols
+            if key not in ["edited_at", "edited_by"]
         )
 
     def __ne__(self, other):
@@ -97,17 +101,14 @@ class WebInstitution(object):
             db.institutions.upsert({"shortname": self.shortname}, data)
 
     def admin_link(self):
-        userdata = db.users.lookup(self.admin)
-        return '<a href="mailto:%s">%s</a>' % (
-            self.admin,
-            userdata["name"] if userdata["name"] else self.admin,
-        )
-
+        rec = userdb.lookup(self.admin)
+        link = rec["homepage"] if rec["homepage"] else "mailto:%s" % rec["email"]
+        return '<a href="%s"><i>%s</i></a>' % (link, "Contact this page's maintainer.")
 
 def can_edit_institution(shortname, new):
-    if not allowed_shortname(shortname):
+    if not allowed_shortname(shortname) or len(shortname) < 2 or len(shortname) > 32:
         flash_error(
-            "The identifier must be nonempty and can include only letters, numbers, hyphens and underscores."
+            "The identifier must be 2 to 32 characters in length and can include only letters, numbers, hyphens and underscores."
         )
         return redirect(url_for("list_institutions"), 302), None
     institution = db.institutions.lookup(shortname)
@@ -117,16 +118,14 @@ def can_edit_institution(shortname, new):
         return redirect(url_for(".index"), 302), None
     if not new and not current_user.is_admin:
         # Make sure user has permission to edit
-        if institution["admin"] != current_user.email:
-            owner_name = db.users.lucky({"email": institution.admin}, "full_name")
-            owner = "<%s %s>" % (owner_name, institution.admin)
-            if owner_name:
-                owner = owner_name + " " + owner
+        if institution["admin"].lower() != current_user.email.lower():
+            rec = userdb.lookup(institution["admin"], "full_name")
+            link = rec["homepage"] if rec["homepage"] else "mailto:%s" % rec["email"]
+            owner = "%s (%s)" % (rec['name'], link)
             flash_error(
                 "You do not have permission to edit %s.  Contact the institution admin, %s, and ask them to fix any errors."
-                % (institution.name, owner)
+                % (institution["name"], owner)
             )
             return redirect(url_for(".index"), 302), None
-    if institution is None:
-        institution = WebInstitution(shortname, data=None, editing=True)
+    institution = WebInstitution(shortname, data=None, editing=new)
     return None, institution

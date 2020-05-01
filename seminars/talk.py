@@ -11,6 +11,10 @@ from seminars.utils import (
     max_distinct,
     adapt_datetime,
     toggle,
+    make_links,
+    topic_dict,
+    languages_dict,
+    topdomain,
 )
 from seminars.seminar import WebSeminar, can_edit_seminar
 from lmfdb.utils import flash_error
@@ -30,9 +34,10 @@ class WebTalk(object):
         editing=False,
         showing=False,
         saving=False,
+        deleted=False,
     ):
         if data is None and not editing:
-            data = talks_lookup(semid, semctr)
+            data = talks_lookup(semid, semctr, include_deleted=deleted)
             if data is None:
                 raise ValueError("Talk %s/%s does not exist" % (semid, semctr))
             data = dict(data.__dict__)
@@ -42,21 +47,23 @@ class WebTalk(object):
             if data.get("topics") is None:
                 data["topics"] = []
         if seminar is None:
-            seminar = WebSeminar(semid)
+            seminar = WebSeminar(semid, deleted=deleted)
         self.seminar = seminar
         self.new = data is None
+        self.deleted=False
         if self.new:
             self.seminar_id = semid
             self.seminar_ctr = None
             self.token = "%016x" % random.randrange(16 ** 16)
             self.display = seminar.display
             self.online = getattr(seminar, "online", bool(seminar.live_link))
+            self.timezone = seminar.timezone
             for key, typ in db.talks.col_type.items():
                 if key == "id" or hasattr(self, key):
                     continue
                 elif db.seminars.col_type.get(key) == typ and getattr(seminar, key, None):
-                    # carry over from seminar
-                    setattr(self, key, getattr(seminar, key))
+                    # carry over from seminar, but not comments
+                    setattr(self, key, getattr(seminar, key) if key != "comments" else "")
                 elif typ == "text":
                     setattr(self, key, "")
                 elif typ == "text[]":
@@ -72,24 +79,56 @@ class WebTalk(object):
                     data["start_time"] = adapt_datetime(data["start_time"], tz)
                 if data.get("end_time"):
                     data["end_time"] = adapt_datetime(data["end_time"], tz)
+            # transition to topics including the subject
+            if data.get("topics"):
+                data["topics"] = [(topic if "_" in topic else "math_" + topic) for topic in data["topics"]]
             self.__dict__.update(data)
 
     def __repr__(self):
         title = self.title if self.title else "TBA"
-        return "%s (%s) - %s, %s" % (title, self.speaker, self.show_date(), self.show_start_time(self.timezone),)
+        return "%s (%s) - %s, %s" % (
+            title,
+            self.speaker,
+            self.show_date(),
+            self.show_start_time(self.timezone),
+        )
 
     def __eq__(self, other):
         return isinstance(other, WebTalk) and all(
             getattr(self, key, None) == getattr(other, key, None) for key in db.talks.search_cols
+            if key not in ["edited_at", "edited_by"]
         )
 
     def __ne__(self, other):
         return not (self == other)
 
+    def visible(self):
+        """
+        Whether this talk should be shown to the current user
+
+        The visibility of a talk is at most the visibility of the seminar,
+        but it can also be hidden even if the seminar is public.
+        """
+        return (self.seminar.owner == current_user.email or
+                current_user.is_subject_admin(self) or
+                self.display and ((self.seminar.visibility is None or self.seminar.visibility > 0) and not self.hidden or
+                                  current_user.email in self.seminar.editors()))
+
+    def searchable(self):
+        """
+        Whether this talk should show up on browse and search results.
+        """
+        return self.display and not self.hidden and self.seminar.searchable()
+
     def save(self):
         data = {col: getattr(self, col, None) for col in db.talks.search_cols}
         assert data.get("seminar_id") and data.get("seminar_ctr")
-        data["edited_by"] = int(current_user.id)
+        topics = self.topics if self.topics else []
+        try:
+            data["edited_by"] = int(current_user.id)
+        except (ValueError, AttributeError):
+            # Talks can be edited by anonymous users with a token, with no id
+            data["edited_by"] = -1
         data["edited_at"] = datetime.datetime.now(tz=pytz.UTC)
         db.talks.insert_many([data])
 
@@ -110,6 +149,10 @@ class WebTalk(object):
         A version of the start time for editing
         """
         return self._editable_time(self.end_time)
+
+    @property
+    def tz(self):
+        return pytz.timezone(self.timezone)
 
     def show_start_time(self, tz=None):
         return adapt_datetime(self.start_time, tz).strftime("%H:%M")
@@ -141,7 +184,7 @@ class WebTalk(object):
         else:
             return adapt_datetime(self.start_time, newtz=tz).strftime("%a %b %-d")
 
-    def show_time_and_duration(self):
+    def show_time_and_duration(self, adapt=True):
         start = self.start_time
         end = self.end_time
         now = datetime.datetime.now(pytz.utc)
@@ -152,11 +195,12 @@ class WebTalk(object):
         week = delta(weeks=1)
         month = delta(days=30.4)
         year = delta(days=365)
+        newtz = None if adapt else self.tz
 
         def ans(rmk):
             return "%s-%s (%s)" % (
-                adapt_datetime(start).strftime("%a %b %-d, %H:%M"),
-                adapt_datetime(end).strftime("%H:%M"),
+                adapt_datetime(start, newtz=newtz).strftime("%a %b %-d, %H:%M"),
+                adapt_datetime(end, newtz=newtz).strftime("%H:%M"),
                 rmk,
             )
 
@@ -196,15 +240,25 @@ class WebTalk(object):
             else:
                 return ans("%s years ago" % (round(ago / year)))
 
-    def show_title(self):
-        return self.title if self.title else "TBA"
-
-
+    def show_title(self, visibility_info=False):
+        title = self.title if self.title else "TBA"
+        if visibility_info:
+            if not self.display:
+                title += " (hidden)"
+            elif self.hidden:
+                title += " (private)"
+            elif self.seminar.visibility == 0:
+                title += " (seminar private)"
+            elif self.seminar.visibility == 1:
+                title += " (seminar unlisted)"
+            elif self.online:
+                title += " (online)"
+        return title
 
     def show_link_title(self):
         return "<a href={url}>{title}</a>".format(
             url=url_for("show_talk", semid=self.seminar_id, talkid=self.seminar_ctr),
-            title=self.show_title()
+            title=self.show_title(),
         )
 
     def show_knowl_title(self):
@@ -212,6 +266,19 @@ class WebTalk(object):
             title=self.show_title(),
             content=Markup.escape(render_template("talk-knowl.html", talk=self)),
         )
+
+    def show_lang_topics(self):
+        if self.language and self.language != "en":
+            ldict = languages_dict()
+            language = '<span class="language_label">%s</span>' % ldict.get(self.language, "Unknown language")
+        else:
+            language = ""
+        if self.topics:
+            subjects = set(topic.split("_", 1)[0] for topic in self.topics)
+            tdict = topic_dict(include_subj=(len(subjects) > 1))
+            return language + "".join('<span class="topic_label">%s</span>' % tdict[topic] for topic in self.topics)
+        else:
+            return language
 
     def show_seminar(self, external=False):
         return self.seminar.show_name(external=external)
@@ -244,18 +311,24 @@ class WebTalk(object):
             success = self.live_link
         else:
             if self.live_link.startswith("http"):
-                success = 'Access <a href="%s">online</a>.' % self.live_link
+                if self.is_starting_soon():
+                    success = '<div class="access_button is_link starting_soon"><b> <a href="%s"> Livestream access <i class="play filter-white"></i> </a></b></div>' % self.live_link
+                else:
+                    success = '<div class="access_button is_link">Livestream access <a href="%s">available</a></div>' % self.live_link
             else:
-                success = "Livestream access: %s" % self.live_link
+                if self.is_starting_soon():
+                    success = '<div class="access_button no_link starting_soon"><b>Livestream access: %s </b></div>' % self.live_link
+                else:
+                    success = '<div class="access_button no_link">Livestream access: %s</div>' % self.live_link
         if self.access == "open":
             return success
         elif self.access == "users":
             if user.is_anonymous:
-                return 'To see access link, please <a href="%s">log in</a> (anti-spam measure).' % (
+                return '<div class="access_button no_link">To see access link, please <a href="%s">log in</a> (anti-spam measure).</b></div>' % (
                     url_for("user.info")
                 )
             elif not user.email_confirmed:
-                return "To see access link, please confirm your email."
+                return '<div class="access_button no_link">To see access link, please confirm your email.</div>'
             else:
                 return success
         elif self.access == "endorsed":
@@ -263,9 +336,25 @@ class WebTalk(object):
                 return success
             else:
                 # TODO: add link to an explanation of endorsement
-                return "To see access link, you must be endorsed by another user."
+                return '<div class="access_button no_link">To see access link, you must be endorsed by another user.</div>'
         else:  # should never happen
             return ""
+
+    def show_paper_link(self):
+        return '<a href="%s">paper</a>'%(self.paper_link) if self.paper_link else ""
+
+    def show_slides_link(self):
+        return '<a href="%s">slides</a>'%(self.slides_link) if self.slides_link else ""
+
+    def show_video_link(self):
+        return '<a href="%s">video</a>'%(self.video_link) if self.video_link else ""
+
+    def is_past(self):
+        return self.end_time < datetime.datetime.now(pytz.utc)
+
+    def is_starting_soon(self):
+        now = datetime.datetime.now(pytz.utc)
+        return (self.start_time - datetime.timedelta(minutes=15) <= now < self.end_time)
 
     def is_subscribed(self):
         if current_user.is_anonymous:
@@ -291,18 +380,20 @@ class WebTalk(object):
         # that takes a seminar's shortname as an argument
         # and returns various error messages if not editable
         return (
-            current_user.is_admin
+            current_user.is_subject_admin(self)
             or current_user.email_confirmed
             and (
-                current_user.email in self.seminar.editors()
-                or current_user.email == self.speaker_email
+                current_user.email.lower() in self.seminar.editors()
+                or (self.speaker_email and current_user.email and
+                    current_user.email.lower() == self.speaker_email.lower())
             )
         )
 
     def delete(self):
         if self.user_can_delete():
             with DelayCommit(db):
-                db.talks.delete({"id": self.id})
+                db.talks.update({"seminar_id": self.seminar_id, "seminar_ctr": self.seminar_ctr},
+                                {"deleted": True})
                 for i, talk_sub in db._execute(
                     SQL("SELECT {},{} FROM {} WHERE {} ? %s").format(
                         *map(
@@ -314,7 +405,7 @@ class WebTalk(object):
                 ):
                     if self.seminar_ctr in talk_sub[self.seminar.shortname]:
                         talk_sub[self.seminar.shortname].remove(self.seminar_ctr)
-                    db.users.update({"id": i}, {"talk_subscriptions": talk_sub})
+                        db.users.update({"id": i}, {"talk_subscriptions": talk_sub})
             return True
         else:
             return False
@@ -328,10 +419,7 @@ class WebTalk(object):
             tglid="tlg" + value, value=value, checked=self.is_subscribed(), classes="subscribe"
         )
 
-    def oneline(self,
-                include_seminar=True,
-                include_subscribe=True,
-                tz=None):
+    def oneline(self, include_seminar=True, include_subscribe=True, tz=None):
         cols = []
         cols.append(('class="date"', self.show_date(tz=tz)))
         cols.append(('class="time"', self.show_start_time(tz=tz)))
@@ -346,25 +434,22 @@ class WebTalk(object):
 
     def show_comments(self):
         if self.comments:
-            return "\n".join("<p>%s</p>\n" % (elt) for elt in self.comments.split("\n\n"))
+            return "\n".join("<p>%s</p>\n" % (elt) for elt in make_links(self.comments).split("\n\n"))
         else:
             return ""
 
-    def split_abstract(self):
-        return self.abstract.split("\n\n")
-
     def show_abstract(self):
         if self.abstract:
-            return "\n".join("<p>%s</p>\n" % (elt) for elt in self.split_abstract())
+            return "<p><b>Abstract</b></p>\n" + "\n".join("<p>%s</p>\n" % (elt) for elt in make_links(self.abstract).split("\n\n"))
         else:
-            return "<p>TBA</p>"
+            return "<p>Abstract TBA</p>"
 
     def speaker_link(self):
-        return "https://mathseminars.org/edit/talk/%s/%s/%s" % (
-            self.seminar_id,
-            self.seminar_ctr,
-            self.token,
-        )
+        return url_for("create.edit_talk_with_token",
+                       seminar_id=self.seminar_id,
+                       seminar_ctr=self.seminar_ctr,
+                       token=self.token,
+                       _external=True, _scheme='https')
 
     def send_speaker_link(self):
         """
@@ -377,12 +462,14 @@ class WebTalk(object):
         }
         email_to = self.speaker_email if self.speaker_email else ""
         return """
-<p>
+<p style="margin-bottom: 0px;">
  To let someone edit this page, send them this link:
-<span class="noclick">{link}</span></br>
-<button onClick="window.open('mailto:{email_to}?{msg}')">
+</p>
+<p style="margin-left: 20px; margin-top: 0px;">
+<span class="noclick">{link}</span>
+<button onClick="window.open('mailto:{email_to}?{msg}')" style="margin-left:20px;">
 Email link to speaker
-</button>""".format(
+</button></p>""".format(
             link=self.speaker_link(), email_to=email_to, msg=urlencode(data, quote_via=quote),
         )
 
@@ -423,12 +510,11 @@ Email link to speaker
         event.add("UID", "%s/%s" % (self.seminar_id, self.seminar_ctr))
         return event
 
-
 def talks_header(include_seminar=True, include_subscribe=True, datetime_header="Your time"):
     cols = []
     cols.append((' colspan="2" class="yourtime"', datetime_header))
     if include_seminar:
-        cols.append((' class="seminar"', "Seminar"))
+        cols.append((' class="seminar"', "Series"))
     cols.append((' class="speaker"', "Speaker"))
     cols.append((' class="title"', "Title"))
     if include_subscribe:
@@ -510,7 +596,9 @@ _maxer = SQL(
 
 def _construct(seminar_dict):
     def inner_construct(rec):
-        if isinstance(rec, str):
+        # The following would break if we had jsonb columns holding dictionaries in the talks table,
+        # but that's not currently true.
+        if not isinstance(rec, dict):
             return rec
         else:
             return WebTalk(
@@ -531,18 +619,18 @@ def _iterator(seminar_dict):
     return inner_iterator
 
 
-def talks_count(query={}):
+def talks_count(query={}, include_deleted=False):
     """
     Replacement for db.talks.count to account for versioning and so that we don't cache results.
     """
-    return count_distinct(db.talks, _counter, query)
+    return count_distinct(db.talks, _counter, query, include_deleted)
 
 
-def talks_max(col, constraint={}):
+def talks_max(col, constraint={}, include_deleted=False):
     """
     Replacement for db.talks.max to account for versioning and so that we don't cache results.
     """
-    return max_distinct(db.talks, _maxer, col, constraint)
+    return max_distinct(db.talks, _maxer, col, constraint, include_deleted)
 
 
 def talks_search(*args, **kwds):
@@ -563,9 +651,10 @@ def talks_lucky(*args, **kwds):
     return lucky_distinct(db.talks, _selecter, _construct(seminar_dict), *args, **kwds)
 
 
-def talks_lookup(seminar_id, seminar_ctr, projection=3, seminar_dict={}):
+def talks_lookup(seminar_id, seminar_ctr, projection=3, seminar_dict={}, include_deleted=False):
     return talks_lucky(
         {"seminar_id": seminar_id, "seminar_ctr": seminar_ctr},
         projection=projection,
         seminar_dict=seminar_dict,
+        include_deleted=include_deleted,
     )

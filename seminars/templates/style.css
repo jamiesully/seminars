@@ -20,6 +20,10 @@ body {
 td.title {
     color: {{color.box_tab_text}};
 }
+h1 {
+  margin: 0px 0px 0px 0px;
+  padding: 0px 0px 0px 0px;
+}
 h2.link > a {
     color: {{color.box_tab_text}};
 }
@@ -84,6 +88,7 @@ h2.link > a {
     text-align: center;
     font-size: 75%;
     color: {{color.footer_text}};
+    min-height: 15px;
 }
 
 #content > ul {
@@ -220,24 +225,22 @@ body.knowl #header {
     padding-top: 10px;
     /* display: inline-block; */
     color: {{color.header_text_title}};
+    min-height: 32px;
+    float: left;
+    min-width: 300px;
 }
 
 #header #title .katex{
     font-weight: bold !important;
 }
 
-#header .bread {
-    font-family: sans-serif;
-    font-size: 90%;
-    display: inline-block;
-}
-
-#header .bread a:first-child {
-    font-size: 150%;
-}
-
-#header .bread a {
-    color: {{color.bread_links}};
+#header #domain {
+  float: right;
+  text-align: right;
+  font-family: sans-serif;
+  float: right;
+  color: {{color.header_text_topright}};
+  padding: 10px;
 }
 
 #header .topright {
@@ -294,20 +297,183 @@ body.knowl #header {
     font-size: 18px;
 }
 
-#top-menu a, #topic-filter-menu a, #language-filter-menu a, #top-menu span {
+#top-menu a, #topic-filter-menu a, #language-filter-menu a, #subject-filter-menu a, #top-menu span {
     text-decoration: none;
     color: #aaaaaa;
     font-family: sans-serif;
     padding: 10px 25px 10px 25px;
+    min-height: 20px;
 }
 
-div.topic_toggle, div.language_toggle {
+#welcome-popup {
+    margin: 0px auto;
+    max-width: 70%;
+}
+
+i.fa.close {
+    color: white;
+    background: #373737;
+    margin-left: 10px;
+    margin-right: 10px;
+}
+i.fa.close:hover {
+    cursor: pointer;
+}
+
+.play:after {
+    content: url("{{ url_for('static', filename='play.svg') }}");
+    vertical-align: -0.125em;
+}
+
+.filter-white:after {
+    filter: brightness(0) saturate(100%) invert(100%);
+}
+
+#topic-filter-menu #subjects-tabs i {
+    margin: 12px 8px 0px 2px;
+}
+
+.topic_label, .language_label {
+    border-radius: 4px;
+    display: inline-block;
+    margin: 2px 4px 2px 0;
+}
+
+.topic_label {
+    background: #373737;
+    color: #fff;
+    padding: 3px 7px;
+}
+
+.access_button {
+    display: inline-block;
+    margin: 2px 4px 2px 4px;
+    padding: 3px 7px;
+    display: inline-block;
+    background: white;
+    border: 2px solid #373737;
+}
+
+.access_button.is_link {
+    background: white;
+    color: black;
+}
+
+.starting_soon.access_button.is_link{
+    border: none;
+    border-radius: 4px;
+    background: red !important;
+}
+
+.starting_soon.access_button.is_link a {
+    color: #fff !important;
+}
+
+.starting_soon a:hover {
+    background: inherit;
+}
+
+.access_button.no_link {
+    border: 2px solid black;
+    background: #fff;
+}
+
+.starting_soon.access_button.no_link {
+    border: 2px solid red !important;
+    background: #fff !important;
+}
+
+.talk-header-container {
+    width 100%;
+    display: flex;
+    flex-direction: row;
+    justify-content: space-between;
+}
+
+.talk-title {
+    align: left;
+}
+
+.talk-view {
+    padding: 20px;
+    white-space: nowrap;
+    text-align: right;
+}
+
+
+.language_label {
+    background: #E3F2FD;
+    color: #000;
+    border: 2px solid #0033bb;
+    padding: 1px 5px;
+}
+
+.ui-tabs {
+    border: none !important;
+    background: #373737 !important;
+}
+
+.ui-widget-header {
+    border: none !important;
+    background: #373737 !important;
+}
+
+.ui-state-default {
+    border: none !important;
+    background: #373737 !important;
+}
+
+.ui-state-active a {
+    color: black !important;
+    border: none !important;
+    background: linear-gradient(to bottom, white 80%, #373737 100%) !important;
+    border-top-left-radius: 5px !important;
+    border-top-right-radius: 5px !important;
+}
+
+.ui-state-default a:hover {
+    color: black !important;
+    background: linear-gradient(to bottom, #aaa 80%, #373737 100%);
+    border-top-left-radius: 5px !important;
+    border-top-right-radius: 5px !important;
+}
+
+
+
+
+.ui-tabs-panel {
+    background: #373737 !important;
+}
+
+.ui-corner-top {
+    border-top-left-radius: 5px !important;
+    border-top-right-radius: 5px !important;
+}
+
+div.topic_toggle, div.language_toggle, div.subject_toggle, div.welcome_toggle {
     display: inline-block;
     min-width: 15%;
     padding: 5px;
     color: #aaaaaa;
 }
-div.topic_toggle:hover, div.language_toggle:hover, div.topic_cmd {
+
+div.topic_toggle.subject-physics {
+    min-width: 32%;
+}
+
+div.subject_toggle, div.welcome_toggle, div.language_toggle  {
+    text-align: center;
+    background: #373737;
+    min-width: 10%;
+}
+
+#welcome-popup {
+    margin: 0px auto;
+    max-width: 1000px;
+    display: none;
+}
+
+div.topic_toggle:hover, div.language_toggle:hover, div.subject_toggle:hover, div.welcome_toggle:hover, div.topic_cmd {
     cursor: pointer;
 }
 div.topic_cmd {
@@ -324,7 +490,7 @@ div.topic_cmd {
   padding-right: 0px;
 }
 
-#topic-filter-menu, #language-filter-menu {
+#topic-filter-menu, #language-filter-menu, #subject-filter-menu {
     display: none;
     background: {{color.header_background}};
 }
@@ -335,9 +501,9 @@ div.topic_cmd {
 }
 
 #make_semconf td.forminfo, #make_inst td.forminfo {
-    padding-bottom: 15px;
+    vertical-align: middle;
 }
-#make_semconf th {
+#make_semconf th, #make_inst th {
     text-align: left;
 }
 
@@ -345,21 +511,19 @@ div.topic_cmd {
     display: none;
 }
 
-.talk-body {
-    max-width: 700px;
-}
-
 #top-menu div.menu-active a {
     background: white;
     color: {{color.header_background}};
+    border-radius: 5px 5px 0 0;
 }
 
 #top-menu a:hover {
     background: #aaaaaa;
     color: {{color.header_background}};
+    border-radius: 5px 5px 0 0;
 }
 
-div.topicselected, div.languageselected {
+div.topicselected, div.languageselected, div.subjectselected {
     color: {{color.header_background}};
     background: #aaaaaa;
 }
@@ -632,6 +796,7 @@ body > .debug {
   font-size: 95%;
   /* line-height: 135%; */
   padding-right: 10px;
+  min-height: calc(100vh - 217px);
 }
 
 #content blockquote
@@ -767,7 +932,7 @@ body.intro #sidebar a.intro { background: {{ color.sidebar_bkg_highlight }}; }
 .forminfo {
    font-size: 80%;
    font-style: italic;
-   color: {{color.grey}};
+   color: {RGC(70,70,70)};
    vertical-align: top;
 }
 
@@ -1353,46 +1518,6 @@ table .knowl a {
    color: {{color.knowl_error}};
 }
 
-/*
-knowl-qm does not seem to be currently used.
-
-.knowl-qm {
-  font-family: sans-serif;
-  font-weight: bold;
-  border: 1px solid {{ color.knowl_thin_border }};
-  background: transparent;
-  color: {{ color.knowl_hover_text }};
-  cursor: pointer;
-  padding: 0 0.4em;
-  border-radius: 0.8em;
-  font-size: 0.9em;
-  top: -0.4em;
-  left: -0.1em;
-}
-.knowl-qm:hover,
-.knowl-qm.active {
-    background: {{color.knowl_db}};
-  color: {{color.white}};
-}
-.knowl-qm.active:hover {
-  background: transparent;
-  color: {{ color.knowl_hover_text }};
-}
-h1 > .knowl-qm {
-  font-size: 0.6em;
-  border-radius: 0.6em;
-  position: relative;
-  top: -0.8em;
-  left: -0.3em;
-}
-h2 > .knowl-qm {
-  font-size: 0.7em;
-  border-radius: 0.7em;
-  position: relative;
-  top: -0.6em;
-  left: -0.4em;
-}
-*/
 .knowl-output {
   background: {{ color.knowl_background }};
   border: 10px solid {{ color.knowl_border }};
@@ -1461,38 +1586,6 @@ div.limit-height {
 }
 
 /* end knowl */
-
-/*** Dirichlet series, displayed in HTML ***/
-
-.dirichletseries {
-  font-family:"Times New Roman", Times, serif;
-}
-
-.dirichletseries em {
-  font-style: italic;
-}
-
-.dirichletseries td {
-  padding-left:0;
-  padding-right:0;
-}
-
-/*
-.dirichletseries td:first-child {
-  padding-top:3px;
-}
-*/
-
-.dirichletseries span.term {
-  white-space: nowrap;
-}
-
-.dirichletseries sup {
-/*  font-size: 75%;
-*/
-  font-style: italic;
-  font-family: KaTeX_Math;
-}
 
 /*** Tables for the Siegel corner ***/
 
@@ -2714,4 +2807,38 @@ li.ical-detail {
 
 .noclick {
   color: #933e20;
+}
+
+.notifyjs-banner-base {
+  padding: 20px;
+  position: relative;
+  display: inline-flex;
+  background: {{color.header_background}};
+  color: #ccc;
+  box-shadow: 1px 1px 3px #aaa;
+}
+
+.notifyjs-banner-base .message {
+  font-size: 14px;
+  font-weight: bold;
+  max-width: 206px;
+  margin: auto;
+}
+
+.notifyjs-banner-base button {
+background: #FFFFFF;
+color: #333333;
+border-radius: 0px;
+border: 2px #FFFFFF solid;
+min-height: 1.6em;
+min-width: 1.6em;
+padding: 0.7em 1.6rem;
+line-height: 1;
+text-align: center;
+cursor: pointer;
+text-decoration: none;
+font-weight: 600;
+font-size: 1rem;
+border: 0px;
+max-width: 150px;
 }

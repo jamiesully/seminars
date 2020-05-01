@@ -17,7 +17,7 @@ from flask import (
 from flask_mail import Mail, Message
 
 from lmfdb.logger import logger_file_handler
-from seminars.utils import topics, top_menu, languages_dict
+from seminars.utils import topics, restricted_topics, subject_pairs, top_menu, languages_dict, topdomain
 from seminars.knowls import static_knowl
 from .seminar import seminars_header
 from .talk import talks_header
@@ -28,10 +28,9 @@ SEMINARS_VERSION = "Seminars Release 0.1"
 #         Main app         #
 ############################
 
-app = Flask(__name__,
-            static_url_path='',
-            static_folder='static',
-            )
+app = Flask(__name__, static_url_path="", static_folder="static",)
+# disable cache temporarily
+app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
 
 mail_settings = {
     "MAIL_SERVER": "heaviside.mit.edu",
@@ -109,13 +108,13 @@ def ctx_proc_userdata():
     # For example, [ ('Bread', '.'), ('Crumb', '.'), ('Hierarchy', '.')]
     data["bread"] = None
 
-    # default title - Math seminars already included in base.html
+    # default title - Research seminars already included in base.html
     data["title"] = r""
 
     # meta_description appears in the meta tag "description"
     data[
         "meta_description"
-    ] = r"Welcome to Math Seminars, a listing of mathematical research seminars, talks and conferences!"
+    ] = r"Welcome to {topdomain}, a listing of research seminars and conferences!".format(topdomain = topdomain())
     data[
         "feedbackpage"
     ] = r"https://docs.google.com/forms/d/e/1FAIpQLSdJNJ0MwBXzqZleN5ibAI9u1gPPu9Aokzsy08ot802UitiDRw/viewform"
@@ -125,14 +124,18 @@ def ctx_proc_userdata():
     data["DEBUG"] = is_debug_mode()
 
     data["topics"] = topics()
+    data["user_topics"] = restricted_topics
+    data["subjects"] = subject_pairs()
     data["top_menu"] = top_menu()
 
     data["talks_header"] = talks_header
     data["seminars_header"] = seminars_header
     data["languages_dict"] = languages_dict()
     data["static_knowl"] = static_knowl
+    data["topdomain"] = topdomain()
 
     return data
+
 
 
 ##############################
@@ -245,7 +248,7 @@ def acknowledgment():
 
 @app.route("/contact")
 def contact():
-    t = "Contact and Feedback"
+    t = "Contact and feedback"
     return render_template("contact.html", title=t, section="Info", subsection="contact")
 
 
@@ -331,7 +334,8 @@ def css():
 
 def send_email(to, subject, message):
     from html2text import html2text
-    sender="mathseminarsnoreply@math.mit.edu"
+
+    sender = "mathseminarsnoreply@math.mit.edu"
     app.logger.info("%s sending email from %s to %s..." % (timestamp(), sender, to))
     mail.send(
         Message(
@@ -345,37 +349,39 @@ def send_email(to, subject, message):
     app.logger.info("%s sending email from %s to %s..." % (timestamp(), sender, to))
 
 
-
 def git_infos():
     try:
         from subprocess import Popen, PIPE
+
         # cwd should be the root of git repo
-        cwd = os.path.join(os.path.dirname(os.path.realpath(__file__)),"..")
-        git_rev_cmd = '''git rev-parse HEAD'''
-        git_date_cmd = '''git show --format="%ci" -s HEAD'''
-        git_contains_cmd = '''git branch --contains HEAD'''
-        git_reflog_cmd = '''git reflog -n5'''
-        git_graphlog_cmd = '''git log --graph  -n 10'''
+        cwd = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..")
+        git_rev_cmd = """git rev-parse HEAD"""
+        git_date_cmd = """git show --format="%ci" -s HEAD"""
+        git_contains_cmd = """git branch --contains HEAD"""
+        git_reflog_cmd = """git reflog -n5"""
+        git_graphlog_cmd = """git log --graph  -n 10"""
         rev = Popen([git_rev_cmd], shell=True, stdout=PIPE, cwd=cwd).communicate()[0]
         date = Popen([git_date_cmd], shell=True, stdout=PIPE, cwd=cwd).communicate()[0]
         contains = Popen([git_contains_cmd], shell=True, stdout=PIPE, cwd=cwd).communicate()[0]
         reflog = Popen([git_reflog_cmd], shell=True, stdout=PIPE, cwd=cwd).communicate()[0]
         graphlog = Popen([git_graphlog_cmd], shell=True, stdout=PIPE, cwd=cwd).communicate()[0]
-        pairs = [[git_rev_cmd, rev],
-                [git_date_cmd, date],
-                [git_contains_cmd, contains],
-                [git_reflog_cmd, reflog],
-                [git_graphlog_cmd, graphlog]]
-        summary = "\n".join("$ %s\n%s" % (c, o.decode('utf8')) for c, o in pairs)
+        pairs = [
+            [git_rev_cmd, rev],
+            [git_date_cmd, date],
+            [git_contains_cmd, contains],
+            [git_reflog_cmd, reflog],
+            [git_graphlog_cmd, graphlog],
+        ]
+        summary = "\n".join("$ %s\n%s" % (c, o.decode("utf8")) for c, o in pairs)
         return rev, date, summary
     except Exception:
-        return '-', '-', '-'
-
+        return "-", "-", "-"
 
 
 @app.route("/raw_info")
 def raw_info():
     from socket import gethostname
+
     output = ""
     output += "HOSTNAME = %s\n\n" % gethostname()
     output += "# PostgreSQL info\n"
@@ -383,4 +389,3 @@ def raw_info():
     output += git_infos()[-1]
     output += "\n\n"
     return output.replace("\n", "<br>")
-

@@ -1,4 +1,3 @@
-
 function toggle_time(id) {
     var future = $('#future_talks');
     var past = $('#past_talks');
@@ -58,11 +57,29 @@ function removeFromCookie(item, cookie) {
     return cur_items;
 }
 
+function subjectFiltering() {
+    return $('#enable_subject_filter').is(":checked");
+}
+function enableSubjectFiltering() {
+    setCookie("filter_subject", "1");
+    $('#enable_subject_filter').prop("checked", true);
+    toggleFilters(null);
+}
 function topicFiltering() {
     return $('#enable_topic_filter').is(":checked");
 }
+function enableTopicFiltering() {
+    setCookie("filter_topic", "1");
+    $('#enable_topic_filter').prop("checked", true);
+    toggleFilters(null);
+}
 function languageFiltering() {
     return $('#enable_language_filter').is(":checked");
+}
+function enableLanguageFiltering() {
+    setCookie("filter_language", "1");
+    $('#enable_language_filter').prop("checked", true);
+    toggleFilters(null);
 }
 function calFiltering() {
     return $('#enable_calendar_filter').is(":checked");
@@ -71,20 +88,40 @@ function calFiltering() {
 function setLanguageLinks() {
     var cur_languages = getCookie("languages");
     if (cur_languages == null) {
-        setCookie("languages", "en");
-        cur_languages = "en";
+        setCookie("languages", "");
+        cur_languages = "";
         setCookie("filter_language", "0");
     } else {
         $('#enable_language_filter').prop("checked", Boolean(parseInt(getCookie("filter_languages"))));
     }
-    cur_languages = cur_languages.split(",");
-    for (var i=0; i<cur_languages.length; i++) {
-        $("#langlink-" + cur_languages[i]).addClass("languageselected");
-        $(".lang-" + cur_languages[i]).removeClass("language-filtered");
+    if (cur_languages.length > 0) {
+        cur_languages = cur_languages.split(",");
+        for (var i=0; i<cur_languages.length; i++) {
+            $("#langlink-" + cur_languages[i]).addClass("languageselected");
+            $(".lang-" + cur_languages[i]).removeClass("language-filtered");
+        }
     }
 }
-function setLinks() {
-    setLanguageLinks();
+
+function setSubjectLinks() {
+    var cur_subjects = getCookie("subjects");
+    if (cur_subjects == null) {
+        console.log("No subjects!");
+        setCookie("subjects", "");
+        setCookie("filter_subject", "0");
+        //$("#filter-table").hide();
+        //$("#welcome-popup").show();
+        cur_subjects = "";
+    } else {
+        $('#enable_subject_filter').prop("checked", Boolean(parseInt(getCookie("filter_subject"))));
+    }
+    cur_subjects = cur_subjects.split(",");
+    for (var i=0; i<cur_subjects.length; i++) {
+        $("#subjectlink-" + cur_subjects[i]).addClass("subjectselected");
+        $(".talk.subject-" + cur_subjects[i]).removeClass("subject-filtered");
+    }
+}
+function setTopicLinks() {
     var cur_topics = getCookie("topics");
     $(".talk").addClass("topic-filtered");
     if (cur_topics == null) {
@@ -98,20 +135,71 @@ function setLinks() {
     } else {
         $('#enable_topic_filter').prop("checked", Boolean(parseInt(getCookie("filter_topic"))));
         $('#enable_language_filter').prop("checked", Boolean(parseInt(getCookie("filter_language"))));
+        $('#enable_subject_filter').prop("checked", Boolean(parseInt(getCookie("filter_subject"))));
         $('#enable_calendar_filter').prop("checked", Boolean(parseInt(getCookie("filter_calendar"))));
         cur_topics = cur_topics.split(",");
         for (var i=0; i<cur_topics.length; i++) {
             $("#topiclink-" + cur_topics[i]).addClass("topicselected");
             $(".topic-" + cur_topics[i]).removeClass("topic-filtered");
         }
+    }
+}
+function welcomeDone() {
+    setCookie("filter_subject", "1");
+    setCookie("cookie_banner", "nomore");
+    $("#welcome-popup").hide();
+    $("#subject-filter-menu").hide();
+    setSubjectLinks();
+    $("#filter-table").show();
+    toggleFilters(null);
+}
+
+function setLinks() {
+    if (navigator.cookieEnabled) {
+        setSubjectLinks();
+        setLanguageLinks();
+        setTopicLinks();
         toggleFilters(null);
     }
 }
+
+function toggleSubject(id, welcome=false) {
+    var toggler = $("#" + id);
+    console.log(id);
+    var subject = id.substring(12); // subjectlink-* or subjectwelc-*
+    var talks = $(".talk.subject-" + subject);
+    if (toggler.hasClass("subjectselected")) {
+        toggler.removeClass("subjectselected");
+        cur_subjects = removeFromCookie(subject, "subjects").split(",");
+        for (i=0; i<cur_subjects.length; i++) {
+            talks = talks.not(".subject-" + cur_subjects[i]);
+        }
+        talks.addClass("subject-filtered");
+        if (subjectFiltering()) {
+            talks.hide();
+            apply_striping();
+        }
+    } else {
+        toggler.addClass("subjectselected");
+        cur_subjects = addToCookie(subject, "subjects").split(",");
+        if (!welcome && cur_subjects.length == 1) {
+            enableSubjectFiltering();
+        }
+        talks.removeClass("subject-filtered");
+        if (subjectFiltering()) {
+            // elements may be filtered by other criteria
+            talks = talksToShow(talks);
+            talks.show();
+            apply_striping();
+        }
+    }
+}
+
 function toggleLanguage(id) {
     var toggler = $("#" + id);
     console.log(id);
     var lang = id.substring(9); // langlink-*
-    var talks = $(".lang-" + lang);
+    var talks = $(".talk.lang-" + lang);
     if (toggler.hasClass("languageselected")) {
         toggler.removeClass("languageselected");
         cur_langs = removeFromCookie(lang, "languages").split(",");
@@ -125,7 +213,10 @@ function toggleLanguage(id) {
         }
     } else {
         toggler.addClass("languageselected");
-        addToCookie(lang, "languages");
+        cur_langs = addToCookie(lang, "languages").split(",");
+        if (cur_langs.length == 1) {
+            enableLanguageFiltering();
+        }
         talks.removeClass("language-filtered");
         if (languageFiltering()) {
             // elements may be filtered by other criteria
@@ -135,11 +226,12 @@ function toggleLanguage(id) {
         }
     }
 }
+
 function toggleTopic(id) {
     var toggler = $("#" + id);
     console.log(id);
     var topic = id.substring(10); // topiclink-*
-    var talks = $(".topic-" + topic);
+    var talks = $(".talk.topic-" + topic);
     if (toggler.hasClass("topicselected")) {
         toggler.removeClass("topicselected");
         cur_topics = removeFromCookie(topic, "topics").split(",");
@@ -153,7 +245,10 @@ function toggleTopic(id) {
         }
     } else {
         toggler.addClass("topicselected");
-        addToCookie(topic, "topics");
+        cur_topics = addToCookie(topic, "topics").split(",");
+        if (cur_topics.length == 1) {
+            enableTopicFiltering();
+        }
         talks.removeClass("topic-filtered");
         if (topicFiltering()) {
             // elements may be filtered by other criteria
@@ -163,38 +258,36 @@ function toggleTopic(id) {
         }
     }
 }
-function getAllTopics() {
+function getAllTopics(subject) {
     var toggles = []
-    $(".topic_toggle").each(function() {
-        toggles.push(this.id.substring(10));
+    $(".topic_toggle.subject-"+subject).each(function() {
+        toggles.push(this.id);
     })
     return toggles;
 }
-function selectAllTopics() {
-    var toggles = getAllTopics();
-    setCookie("topics", toggles.join(","));
-    $(".topic_toggle").addClass("topicselected");
-    var talks = $(".talk");
-    talks.removeClass("topic-filtered");
-    if (topicFiltering()) {
-        talks = talksToShow(talks);
-        talks.show();
-        apply_striping();
-    }
-}
-function clearAllTopics() {
-    setCookie("topics", "");
-    var toggles = getAllTopics();
-    $(".topic_toggle").removeClass("topicselected");
-    var talks = $(".talk");
-    talks.addClass("topic-filtered");
-    if (topicFiltering()) {
-        talks.hide();
-        // no need to apply striping since no visible talks
-    }
+
+function selectAllTopics(subject) {
+    var toggles = getAllTopics(subject);
+    toggles.forEach(function(id,index){
+        var toggler = $("#" + id);
+        if (! toggler.hasClass("topicselected")) {
+            toggleTopic(id);
+        }
+    })
 }
 
-var filter_classes = [['.topic-filtered', topicFiltering], ['.language-filtered', languageFiltering], ['.calendar-filtered', calFiltering]]
+function clearAllTopics(subject) {
+    var toggles = getAllTopics(subject);
+    toggles.forEach(function(id,index){
+        var toggler = $("#" + id);
+        if (toggler.hasClass("topicselected")) {
+            toggleTopic(id);
+        }
+    })
+}
+
+var filter_menus = ['topic', 'subject', 'language'];
+var filter_classes = [['.topic-filtered', topicFiltering], ['.subject-filtered', subjectFiltering], ['.language-filtered', languageFiltering], ['.calendar-filtered', calFiltering]];
 function talksToShow(talks) {
     for (i=0; i<filter_classes.length; i++) {
         if (filter_classes[i][1]()) {
@@ -204,11 +297,19 @@ function talksToShow(talks) {
     }
     return talks;
 }
-function toggleFilters(id) {
-    console.log(id);
+function filterMenuVisible(ftype) {
+    return $("#"+ftype+"-filter-menu").is(":visible");
+}
+function toggleFilters(id, on_menu_open=false) {
+    console.log("filters", id);
     if (id !== null) {
         console.log($('#'+id).is(":checked"));
-        setCookie("filter_" + id.split("_")[1], $('#'+id).is(":checked") ? "1" : "0");
+        var is_enabled = $('#'+id).is(":checked")
+        var ftype = id.split("_")[1]
+        setCookie("filter_" + ftype, is_enabled ? "1" : "0");
+        if (!on_menu_open && is_enabled && !filterMenuVisible(ftype) && !getCookie(ftype+"s")) {
+            toggleFilterView(ftype+"-filter-btn");
+        }
     }
     var talks = $('.talk');
     console.log(talks.length);
@@ -216,6 +317,44 @@ function toggleFilters(id) {
     talks = talksToShow(talks);
     talks.show();
     apply_striping();
+}
+function toggleFilterView(id) {
+    // If this filter is not enabled, we enable it
+    //console.log("filterview", id);
+    var ftype = id.split("-")[0];
+    var is_enabled = Boolean(parseInt(getCookie("filter_"+ftype)));
+    var visible = filterMenuVisible(ftype)
+    if (!is_enabled && !visible) {
+        var filtid = 'enable_'+ftype+'_filter';
+        $('#'+filtid).prop("checked", true);
+        toggleFilters(filtid, true);
+    }
+    if (ftype == "topic" && !visible) {
+        // Count the number of active topics in each tab
+        var max_tab_count = 0;
+        var max_tab = "math";
+        let tabs = $("#subjects-tabs").children("div.tab-subject-panel");
+        tabs.each(function (i, elt) {
+            let tab_count = $("#"+elt.id).children("div.topicselected").length;
+            //console.log(elt.id, tab_count, max_tab_count);
+            if (tab_count > max_tab_count) {
+                max_tab_count = tab_count;
+                max_tab = elt.id.split("-")[1];
+            }
+        });
+        //console.log(max_tab, );
+        // subject_list defined at the bottom of browse.html because I can't figure out how to get
+        // a list of subjects out of jquery.
+        $('#subjects-tabs').tabs({ active: subject_list.indexOf(max_tab)});
+    }
+    for (i=0; i<filter_menus.length; i++) {
+        var elt = $("#"+filter_menus[i]+"-filter-menu");
+        if (ftype == filter_menus[i]) {
+            elt.slideToggle(150);
+        } else {
+            elt.slideUp(150);
+        }
+    }
 }
 
 function apply_striping() {
@@ -299,7 +438,7 @@ function makeInstitutionSelector(instOptions, initialInstitutions) {
 }
 function makeLanguageSelector(langOptions, initialLanguage) {
     function callback_language(value) {
-        $('input[name="language"]')[0].value = value;
+        $('input[name="language"]').value = value;
     }
     return new SelectPure("#language_selector", {
         onChange: callback_language,
@@ -309,8 +448,50 @@ function makeLanguageSelector(langOptions, initialLanguage) {
         classNames: selectPureClassNames,
     });
 }
+function makeSubjectSelector(subjOptions, initialSubjects) {
+    function callback_subjects(value) {
+      // hidden inputs by default don't trigger a change event
+        $('input[name="subjects"]').val('[' + value + ']').trigger('change');
+    }
+    return new SelectPure("#subject_selector", {
+        onChange: callback_subjects,
+        options: subjOptions,
+        multiple: true,
+        autocomplete: true,
+        icon: "fa fa-times",
+        inlineIcon: false,
+        value: initialSubjects,
+        classNames: selectPureClassNames,
+    });
+}
+
+function displayCookieBanner() {
+    console.log("showing banner");
+    $.notify.addStyle('banner', {
+        html: "<div><div class='message' data-notify-html='message'/><div><button class='yes' data-notify-text='button'></button></div></div></div>",
+    });
+
+    //listen for click events from this style
+    $(document).on('click', '.notifyjs-banner-base .yes', function() {
+        //hide notification
+        $(this).trigger('notify-hide');
+        setCookie("cookie_banner", "nomore");
+    });
+    $.notify({
+        message: 'This website uses cookies to improve your experience.',
+        button: 'Got it!'
+    }, {
+        style: 'banner',
+        position: 'b r',
+        autoHide: false,
+        clickToHide: false
+    });
+}
 
 $(document).ready(function () {
+    if (navigator.cookieEnabled && !document.cookie.includes('cookie_banner')) {
+        displayCookieBanner();
+    }
 
     setLinks();
 
@@ -320,6 +501,16 @@ $(document).ready(function () {
             toggle_time(this.id);
             return false;
         });
+    $('.subject_toggle').click(
+        function (evt) {
+            evt.preventDefault();
+            toggleSubject(this.id);
+        });
+    /*$('.welcome_toggle').click(
+        function (evt) {
+            evt.preventDefault();
+            toggleSubject(this.id, true);
+        });*/
     $('.topic_toggle').click(
         function (evt) {
             evt.preventDefault();

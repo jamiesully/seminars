@@ -5,14 +5,14 @@
   <h1>You are not logged in</h1>
 
   <div style="margin-bottom: 20px">New user?
-     <a href="{{ url_for('.register') }}">Register here</a>
+     <a href="{{ url_for('.register') }}">Register here</a>.
   </div>
 
   <form name="login" action="{{ url_for('.login') }}" method="POST">
     <input type="hidden" name="next" value="{{ next }}" />
     <table>
       <tr><td>Email:</td>
-          <td><input name="email" /></td></tr>
+          <td><input name="email" placeholder="existing_user@univ.edu" /></td></tr>
       <tr><td>Password:</td>
           <td><input name="password" type="password" /></td>
           <td> (<a href="{{ url_for('.reset_password') }}">Forgot password?</a>) </td>
@@ -22,8 +22,8 @@
     </table>
   </form>
 {% else %}
-<h1>Welcome {{ user.name }} (<a href="{{ url_for(".logout") }}">Logout</a>)</h1>
-  <h3> Favorite seminars </h3>
+<h1>Welcome {{ user.name }} (<a href="{{ url_for(".logout") }}">logout</a>)</h1>
+  <h3> Favorite series </h3>
   <div style="margin-left: 1em;">
   <table class='ntdata'>
     <thead>
@@ -38,7 +38,7 @@
     {% endfor %}
   </table>
   </div>
-  <h3> Favorite talks (outside favorite seminars) </h3>
+  <h3> Favorite talks (outside favorite series) </h3>
   <div style="margin-left: 1em;">
   <table class='ntdata'>
     <thead>
@@ -85,15 +85,15 @@
   {% if user.is_creator %}
   <h2>Adding content</h2>
   <p>
-    To add content or manage the seminars that you organize, use the <a href="{{ url_for('create.index') }}">Manage</a> tab in the top menu.
+    To add content or manage the series that you organize, use the <a href="{{ url_for('create.index') }}">Manage</a> tab in the top menu.
   </p>
   <h2>Endorse someone to add content</h2>
 
     <form action="{{ url_for('.get_endorsing_link') }}" method="post" name="endorse">
     <table>
       <tr>
-        <td>
-          Email:
+        <td style="width:75px;">
+          Email
         </td>
         <td>
           <input name="email" size="30" tabindex="1" />
@@ -110,11 +110,11 @@
   <form action="{{ url_for('.set_info') }}" method="post" name="userinfo">
     <table>
       <tr>
-        <td>Created:</td>
+        <td>Created</td>
         <td>{{ user.created|fmtdatetime }}</td>
       </tr>
       <tr>
-        <td>Email:</td>
+        <td>Email</td>
         <td><input name="email" value="{{user.email}}" size="30" tabindex="1" /></td>
         {% if not user.email_confirmed %}
         <td>
@@ -123,36 +123,37 @@
         {%endif%}
       </tr>
       <tr>
-        <td>Name:</td>
+        <td>Name</td>
         <td><input name="name" value="{{user.name}}" size="30" tabindex="1" /></td>
         <td/>
       </tr>
       <tr>
-        <td>Affiliation:</td>
+        <td>Affiliation</td>
         <td><input name="affiliation" value="{{user.affiliation}}" size="30" tabindex="1" /></td>
         <td/>
       </tr>
       <tr>
-        <td>Homepage:</td>
-        <td><input name="homepage" id="url" value="{{user.homepage}}" size="30" tabindex="3" /></td>
-        <td id="urltest" /></td>
+        <td>Homepage</td>
+        <td><input name="homepage" id="url" value="{{user.homepage}}" size="30" tabindex="3" placeholder="https://upan.edu/~someone"/></td>
+        {% if not user.homepage %} <td class=forminfo> Entering your homepage ensures your email is never visible (use https if possible).</td> {% endif %}
       </tr>
-    <tr>
-      <td>Timezone:</td>
-      <td>
-        <select name="timezone">
-        {% for tz, pretty_tz in [('', 'Browser time zone')] + timezones %}
+      <tr>
+        <td>Timezone</td>
+        <td>
+          <select name="timezone" style="width:356px;">
+            {% for tz, pretty_tz in [('', 'Browser time zone')] + timezones %}
             <option value="{{tz}}"
                     {% if tz == user.raw_timezone %}
                     selected=true
                     {%endif%}
                     >
-                    {{pretty_tz}}
+              {{pretty_tz}}
             </option>
-        {% endfor %}
-        </select>
-      </td>
-    </tr>
+            {% endfor %}
+          </select>
+        </td>
+      </tr>
+
 
       <tr><td colspan="3" class="spacing" /></tr>
       <tr>
@@ -169,15 +170,15 @@
   <form action="{{ url_for('.change_password') }}" method="POST" name="changepassword">
    <table>
     <tr>
-     <td>Old Password:</td>
-     <td><input name="oldpwd" type="password" /></td>
+     <td>Old password</td>
+     <td><input name="oldpwd" type="password" style="width:260px;"/></td>
      <tr><td colspan="2" class="forminfo" />Don't use a password that you use elsewhere!</tr>
-     <tr><td>New Password:</td>
-         <td><input id="pw1" name="password1" type="password" /></td>
+     <tr><td>New password</td>
+         <td><input id="pw1" name="password1" type="password" style="width:260px;"/></td>
          <td class="forminfo" id="pw1status" style="color: {{color.red}};"></td></tr>
      </tr>
-     <tr><td>New Password (repeat):</td>
-         <td><input id="pw2" name="password2" type="password" /></td>
+     <tr><td>New password (repeat)</td>
+         <td><input id="pw2" name="password2" type="password" style="width:260px;"/></td>
          <td class="forminfo" id="pw2status" style="color: {{color.red}};"></td></tr>
     <tr>
      <tr><td colspan="2" class="spacing" /></tr>
@@ -187,6 +188,11 @@
    </table>
   </form>
 
+  <h2>Delete account</h2>
+
+<p> Deleting your account will remove all personal information about you from our database (your favorites, the "details" above, etc.), though talks and series you've created will remain.</p>
+
+<p><a href="{{ url_for('user.permanently_deleteme') }}" onclick="return confirm('Are you sure you want to PERMANENTLY delete your account?');">Permanently delete account</a></p>
 
 
 {# this script constructs a url and shows it as a link, just for testing #}
@@ -202,11 +208,10 @@ function makelink() {
 $(function() {
    $("#url").keyup(function(evt) { evt.preventDefault(); makelink()});
 });
+
 makelink();
 
 /* this tells the user if the passwords match */
-
-
 $(function () {
   $("#pw1").keyup(function(evt) { evt.preventDefault(); checkpw(); });
   $("#pw2").keyup(function(evt) { evt.preventDefault(); checkpw(); });

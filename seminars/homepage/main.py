@@ -1,11 +1,22 @@
 from seminars.app import app
 from seminars import db
 from seminars.talk import talks_search, talks_lucky
-from seminars.utils import topics, toggle, Toggle, languages_dict
+from seminars.utils import (
+    restricted_topics as user_topics,
+    toggle,
+    Toggle,
+    languages_dict,
+    subject_dict,
+    subject_pairs,
+    topics,
+    topdomain,
+)
 from seminars.institution import institutions, WebInstitution
-from flask import render_template, request, url_for
-from seminars.seminar import seminars_search, all_seminars, all_organizers, seminars_lucky
+from seminars.knowls import static_knowl
+from flask import render_template, request, redirect, url_for, Response, make_response
+from seminars.seminar import seminars_search, all_seminars, all_organizers, seminars_lucky, next_talk_sorted
 from flask_login import current_user
+import json
 import datetime
 import pytz
 from collections import Counter
@@ -19,6 +30,7 @@ from lmfdb.utils import (
     to_dict,
     flash_error,
 )
+
 from lmfdb.utils.search_parsing import collapse_ors
 
 
@@ -31,7 +43,10 @@ def parse_topic(info, query, prefix):
     # of the talk
     topic = info.get(prefix + "_topic")
     if topic:
-        query["topics"] = {"$contains": topic}
+        # FIXME: temporary bridge during addition of physics
+        if "_" not in topic:
+            topic = "math_" + topic
+        query["topics"] = {"$or": [{"$contains": topic}, {"$contains": topic[5:]}]}
 
 
 def parse_institution_sem(info, query, prefix="seminar"):
@@ -52,20 +67,24 @@ def parse_institution_talk(info, query, prefix="talk"):
         query["seminar_id"] = {"$in": sem_shortnames}
 
 
-def parse_online(info, query, prefix):
-    if info.get(prefix + "_online") == "yes":
+def parse_venue(info, query, prefix):
+    value = info.get(prefix + "_venue")
+    if value == "online":
         query["online"] = True
-
-
-def parse_offline(info, query, prefix):
-    if info.get(prefix + "_offline") == "yes":
-        query["room"] = {"$exists": True}
+    elif value == "in-person":
+        query["room"] = {"$and": [{"$exists": True}, {"$ne": ""}]}
 
 
 def parse_substring(info, query, field, qfields, start="%", end="%"):
     if info.get(field):
         kwds = [elt.strip() for elt in info.get(field).split(",") if elt.strip()]
-        collapse_ors(["$or", [{qfield: {"$ilike": start + elt + end}} for elt in kwds for qfield in qfields]], query)
+        collapse_ors(
+            [
+                "$or",
+                [{qfield: {"$ilike": start + elt + end}} for elt in kwds for qfield in qfields],
+            ],
+            query,
+        )
 
 
 def parse_access(info, query, prefix):
@@ -89,16 +108,16 @@ def parse_date(info, query):
         if start.strip():
             try:
                 start = tz.localize(parse(start))
+                sub_query["$gte"] = start
             except Exception:
-                flash_error("Could not parse date: %s", start)
-            sub_query["$gte"] = start
+                flash_error("Could not parse date: '%s'", start)
         if end.strip():
             try:
                 end = tz.localize(parse(end))
+                end = end + datetime.timedelta(hours=23, minutes=59, seconds=59)
+                sub_query["$lte"] = end
             except Exception:
-                flash_error("Could not parse date: %s", end)
-            end = end + datetime.timedelta(hours=23, minutes=59, seconds=59)
-            sub_query["$lte"] = end
+                flash_error("Could not parse date: '%s'", end)
         if sub_query:
             query["start_time"] = sub_query
 
@@ -106,19 +125,28 @@ def parse_date(info, query):
 def parse_video(info, query):
     v = info.get("video")
     if v == "yes":
-        query["video_link"] = {"$not": None}
+        query["video_link"] = {"$ne": ''}
+
 
 def parse_language(info, query, prefix):
     v = info.get(prefix + "_language")
     if v:
         query["language"] = v
 
+
 def talks_parser(info, query):
     parse_topic(info, query, prefix="talk")
     parse_institution_talk(info, query)
-    parse_online(info, query, prefix="talk")
-    parse_offline(info, query, prefix="talk")
-    parse_substring(info, query, "talk_keywords", ["title", "abstract"])
+    #parse_venue(info, query, prefix="talk")
+    parse_substring(info, query, "talk_keywords",
+                    ["title",
+                     "abstract",
+                     "speaker",
+                     "speaker_affiliation",
+                     "seminar_id",
+                     "comments",
+                     "speaker_homepage",
+                     "paper_link"])
     parse_access(info, query, prefix="talk")
 
     parse_substring(info, query, "speaker", ["speaker"])
@@ -128,20 +156,35 @@ def talks_parser(info, query):
     parse_video(info, query)
     parse_language(info, query, prefix="talk")
     query["display"] = True
+    # TODO: remove this temporary measure allowing hidden to be None
+    query["hidden"] = {"$or": [False, {"$exists": False}]}
+    # These are necessary but not succificient conditions to display the talk
+    # Also need that the seminar has visibility 2.
 
+    # FIXME: temporary measure during addition of physics
+    if topdomain() == "mathseminars.org":
+        query["subjects"] = ["math"]
 
 def seminars_parser(info, query):
     parse_topic(info, query, prefix="seminar")
     parse_institution_sem(info, query)
-    parse_online(info, query, prefix="seminar")
-    parse_offline(info, query, prefix="seminar")
-    parse_substring(info, query, "seminar_keywords", ["description", "comments", "name"])
+    #parse_venue(info, query, prefix="seminar")
+    parse_substring(info, query, "seminar_keywords",
+                    ["name",
+                     "description",
+                     "homepage",
+                     "shortname",
+                     "comments"])
     parse_access(info, query, prefix="seminar")
     parse_language(info, query, prefix="seminar")
 
     parse_substring(info, query, "name", ["name"])
     query["display"] = True
+    query["visibility"] = 2
 
+    # FIXME: temporary measure during addition of physics
+    if topdomain() == "mathseminars.org":
+        query["subjects"] = ["math"]
 
 # Common boxes
 
@@ -161,7 +204,7 @@ class TalkSearchArray(SearchArray):
 
     def __init__(self):
         ## topics
-        topic = SelectBox(name="talk_topic", label="Topics", options=[("", "")] + topics())
+        topic = SelectBox(name="talk_topic", label="Topics", options=[("", "")] + user_topics())
 
         ## pick institution where it is held
         institution = SelectBox(
@@ -171,15 +214,20 @@ class TalkSearchArray(SearchArray):
             + [(elt["shortname"], elt["name"]) for elt in institutions_shortnames()],
         )
 
-        ## online only?
-        online = Toggle(name="talk_online", label="Online")
-        offline = Toggle(name="talk_offline", label="Offline")
+        venue = SelectBox(
+            name="talk_venue",
+            label=static_knowl("venue"),
+            options=[("", ""),
+                     ("online", "online"),
+                     ("in-person", "in-person")
+                     ]
+        )
+        assert venue
 
         ## keywords for seminar or talk
         keywords = TextBox(
             name="talk_keywords",
-            label="Keywords",
-            knowl="keywords",
+            label="Anywhere",
             colspan=(1, 2, 1),
             width=textwidth,
         )
@@ -230,16 +278,21 @@ class TalkSearchArray(SearchArray):
         language = SelectBox(
             name="talk_language",
             label="Language",
-            options=[("", ""), ("en", "English")] + [(code, lang_dict[code]) for code in sorted(db.talks.distinct('language')) if code != "en"]
+            options=[("", ""), ("en", "English")]
+            + [
+                (code, lang_dict[code])
+                for code in sorted(db.talks.distinct("language"))
+                if code != "en"
+            ],
         )
         video = Toggle(name="video", label="Has video")
         self.array = [
             [topic, keywords],
             [institution, title],
-            [online, speaker],
-            [offline, affiliation],
-            [access, language],
+            [language, speaker],
+            [access, affiliation],
             [video, date],
+            # [venue],
             # [count],
         ]
 
@@ -257,12 +310,12 @@ class TalkSearchArray(SearchArray):
 
 
 class SemSearchArray(SearchArray):
-    noun = "seminar"
-    plural_noun = "seminars"
+    noun = "series"
+    plural_noun = "series"
 
     def __init__(self):
         ## topics
-        topic = SelectBox(name="seminar_topic", label="Topics", options=[("", "")] + topics())
+        topic = SelectBox(name="seminar_topic", label="Topics", options=[("", "")] + user_topics())
 
         ## pick institution where it is held
         institution = SelectBox(
@@ -272,14 +325,18 @@ class SemSearchArray(SearchArray):
             + [(elt["shortname"], elt["name"]) for elt in institutions_shortnames()],
         )
 
-        ## online only?
-        online = Toggle(name="seminar_online", label="Online")
-        # offline = Toggle(name="seminar_offline", label="Offline")
+        venue = SelectBox(
+            name="seminar_venue",
+            label=static_knowl("venue"),
+            options=[("", ""),
+                     ("online", "online"),
+                     ("in-person", "in-person")
+                     ]
+        )
+        assert venue
 
         ## keywords for seminar or talk
-        keywords = TextBox(
-            name="seminar_keywords", label="Keywords", width=textwidth,
-        )
+        keywords = TextBox(name="seminar_keywords", label="Anywhere", width=textwidth,)
         ## type of access
         access = SelectBox(
             name="seminar_access",
@@ -294,7 +351,12 @@ class SemSearchArray(SearchArray):
         language = SelectBox(
             name="seminar_language",
             label="Language",
-            options=[("", ""), ("en", "English")] + [(code, lang_dict[code]) for code in sorted(db.talks.distinct('language')) if code != "en"]
+            options=[("", ""), ("en", "English")]
+            + [
+                (code, lang_dict[code])
+                for code in sorted(db.talks.distinct("language"))
+                if code != "en"
+            ],
         )
         ## number of results to display
         # count = TextBox(name="seminar_count", label="Results to display", example=50, example_value=True)
@@ -310,7 +372,7 @@ class SemSearchArray(SearchArray):
             [topic, keywords],
             [institution, name],
             [language, access],
-            [online],
+            # [venue],
             # [count],
         ]
 
@@ -319,7 +381,7 @@ class SemSearchArray(SearchArray):
 
     def search_types(self, info):
         return [
-            ("seminars", "Search for seminars"),
+            ("seminars", "Search for series"),
             BasicSpacer("Times in %s" % (current_user.show_timezone("browse"))),
         ]
 
@@ -329,20 +391,53 @@ class SemSearchArray(SearchArray):
 
 @app.route("/")
 def index():
+    return _index({})
+
+def by_subject(subject):
+    subject = subject.lower()
+    if subject not in subject_dict():
+        return render_template("404.html", title="Subject %s not found" % subject)
+    return lambda: _index({"subjects": {"$contains": subject}})
+
+def by_topic(subject, topic):
+    full_topic = subject + "_" + topic
+    return lambda: _index({"topics": {"$contains": full_topic}})
+
+# We don't want to intercept other routes by doing @app.route("/<subject>") etc.
+for subject in subject_dict():
+    app.add_url_rule("/%s/" % subject, "by_subject_%s" % subject, by_subject(subject))
+for ab, name, subject in topics():
+    app.add_url_rule("/%s/%s/" % (subject, ab.replace("_", ".")), "by_topic_%s_%s" % (subject, ab), by_topic(subject, ab))
+
+def _index(query):
     # Eventually want some kind of cutoff on which talks are included.
-    talks = list(
-        talks_search(
-            {"display": True, "end_time": {"$gte": datetime.datetime.now()}},
-            sort=["start_time"],
-            seminar_dict=all_seminars(),
-        )
-    )
+    query = dict(query)
+    subs = subject_pairs()
+    hide_filters = []
+    if "subjects" in query:
+        subject = query["subjects"]["$contains"]
+        hide_filters = ["subject"]
+        subs = ((subject, subject.capitalize()),)
+    elif "topics" in query:
+        hide_filters = ["subject", "topic"]
+    elif topdomain() == "mathseminars.org":
+        query["subjects"] = ["math"]
+    query["display"] = True
+    query["hidden"] = {"$or": [False, {"$exists": False}]}
+    query["end_time"] = {"$gte": datetime.datetime.now()}
+    talks = list(talks_search(query, sort=["start_time"], seminar_dict=all_seminars()))
+    # Filtering on display and hidden isn't sufficient since the seminar could be private
+    talks = [talk for talk in talks if talk.searchable()]
     topic_counts = Counter()
     language_counts = Counter()
+    subject_counts = Counter()
     for talk in talks:
         if talk.topics:
             for topic in talk.topics:
                 topic_counts[topic] += 1
+        if talk.subjects:
+            for subject in talk.subjects:
+                subject_counts[subject] += 1
         language_counts[talk.language] += 1
     lang_dict = languages_dict()
     languages = [(code, lang_dict[code]) for code in language_counts]
@@ -350,15 +445,17 @@ def index():
     # menu[0] = ("#", "$('#filter-menu').slideToggle(400); return false;", "Filter")
     return render_template(
         "browse.html",
-        title="Math Seminars (beta)",
+        title="Browse",
+        hide_filters=hide_filters,
         topic_counts=topic_counts,
+        subject_counts=subject_counts,
         languages=languages,
         language_counts=language_counts,
         talks=talks,
+        subjects=subs,
         section="Browse",
         toggle=toggle,
     )
-
 
 @app.route("/search")
 def search():
@@ -386,16 +483,21 @@ def search():
         talk_start = info["talk_start"] = 0
     seminar_query = {}
     seminars_parser(info, seminar_query)
-    info["seminar_results"] = seminars_search(
-        seminar_query, sort=["weekday", "start_time", "name"], organizer_dict=all_organizers(),
-    )  # limit=seminar_count, offset=seminar_start,
+    # Ideally we would do the following with a single join query, but the backend doesn't support joins yet.
+    # Instead, we use a function that returns a dictionary of all next talks as a function of seminar id.
+    # One downside of this approach is that we have to retrieve ALL seminars, which we're currently doing anyway.
+    # The second downside is that we need to do two queries.
+    info["seminar_results"] = next_talk_sorted(seminars_search(seminar_query, organizer_dict=all_organizers()))
     talk_query = {}
     talks_parser(info, talk_query)
-    info["talk_results"] = talks_search(
+    talks = talks_search(
         talk_query, sort=["start_time", "speaker"], seminar_dict=all_seminars()
     )  # limit=talk_count, offset=talk_start
+    # The talk query isn't sufficient since we don't do a join so don't have access to whether the seminar is private
+    talks = [talk for talk in talks if talk.searchable()]
+    info["talk_results"] = talks
     return render_template(
-        "search.html", title="Search seminars", info=info, section="Search", bread=None,
+        "search.html", title="Search", info=info, section="Search", bread=None,
     )
 
 
@@ -416,6 +518,9 @@ def show_seminar(shortname):
     seminar = seminars_lucky({"shortname": shortname})
     if seminar is None:
         return render_template("404.html", title="Seminar not found")
+    if not seminar.visible():
+        flash_error("You do not have permission to view %s", seminar.name)
+        return redirect(url_for("search"), 302)
     talks = seminar.talks(projection=3)
     now = get_now()
     future = []
@@ -427,13 +532,13 @@ def show_seminar(shortname):
             past.append(talk)
     future.sort(key=lambda talk: talk.start_time)
     past.sort(key=lambda talk: talk.start_time, reverse=True)
-    if current_user.email in seminar.editors() or current_user.is_admin:
+    if current_user.email in seminar.editors() or current_user.is_subject_admin(seminar):
         section = "Manage"
     else:
         section = None
     return render_template(
         "seminar.html",
-        title="View seminar",
+        title="View series",
         future=future,
         past=past,
         seminar=seminar,
@@ -442,29 +547,79 @@ def show_seminar(shortname):
         bread=None,
     )
 
-@app.route("/seminar_raw/<shortname>")
+
+def talks_search_api(shortname, projection=1):
+    query = {"seminar_id": shortname, "display": True, "hidden": {"$or": [False, {"$exists": False}]}}
+    reverse_sort = False
+    if 'daterange' in request.args:
+        if request.args.get('daterange') == 'past':
+            query["start_time"] = {'$lte': get_now()}
+        elif request.args.get('daterange') == 'future':
+            query["start_time"] = {'$gte': get_now()}
+        else:
+            parse_date(request.args, query)
+    elif 'past' in request.args and 'future' in request.args:
+        # no restriction on date
+        pass
+    elif 'past' in request.args:
+        query["start_time"] = {'$lte': get_now()}
+        reverse_sort = True
+    elif 'future' in request.args:
+        query["start_time"] = {'$gte': get_now()}
+    talks = list(talks_search(query, projection=3))
+    talks.sort(key=lambda talk: talk.start_time, reverse=reverse_sort)
+    return talks
+
+@app.route("/seminar/<shortname>/raw")
 def show_seminar_raw(shortname):
     seminar = seminars_lucky({"shortname": shortname})
-    if seminar is None:
+    if seminar is None or not seminar.visible():
         return render_template("404.html", title="Seminar not found")
-    talks = seminar.talks(projection=3)
-    now = get_now()
-    future = []
-    past = []
-    for talk in talks:
-        if talk.end_time >= now:
-            future.append(talk)
-        else:
-            past.append(talk)
-    future.sort(key=lambda talk: talk.start_time)
-    past.sort(key=lambda talk: talk.start_time, reverse=True)
+    talks = talks_search_api(shortname)
     return render_template(
-        "seminar_raw.html",
-        title=seminar.name,
-        future=future,
-        past=past,
-        seminar=seminar
+        "seminar_raw.html", title=seminar.name, talks=talks, seminar=seminar
     )
+
+@app.route("/seminar/<shortname>/json")
+def show_seminar_json(shortname):
+    seminar = seminars_lucky({"shortname": shortname})
+    if seminar is None or not seminar.visible():
+        return render_template("404.html", title="Seminar not found")
+    # FIXME
+    cols = [
+        "start_time",
+        "end_time",
+        "speaker",
+        "title",
+        "abstract",
+        "speaker_affiliation",
+        "speaker_homepage",
+    ]
+    talks = [
+        {c: getattr(elt, c) for c in cols}
+        for elt in talks_search_api(shortname, projection=["seminar_id"] + cols)
+    ]
+    callback = request.args.get("callback", False)
+    if callback:
+        return Response(
+            "{}({})".format(str(callback), json.dumps(talks, default=str)),
+            mimetype="application/javascript",
+        )
+    else:
+        return Response(json.dumps(talks, default=str), mimetype="application/json")
+
+@app.route("/embeddable_schedule.js")
+def show_seminar_js():
+    """
+    Usage example:
+    <div class="embeddable_schedule" shortname="LATeN" daterange="future"></div>
+    <div class="embeddable_schedule" shortname="LATeN" daterange="past"></div>
+    <div class="embeddable_schedule" shortname="LATeN" daterange="future"></div>
+    <script src="http://localhost:37778/embeddable_schedule.js" onload='embed_schedule();'></script>
+    """
+    resp = make_response(render_template('seminar_raw.js', scheme=request.scheme))
+    resp.headers['Content-type'] = 'text/javascript'
+    return resp
 
 
 @app.route("/talk/<semid>/<int:talkid>/")
@@ -485,7 +640,7 @@ def show_talk(semid, talkid):
         menu[2] = (url_for("create.index"), "", "Manage")
         kwds["top_menu"] = menu
     elif (
-        current_user.is_admin
+        current_user.is_subject_admin(talk)
         or current_user.email_confirmed
         and (
             current_user.email in talk.seminar.editors() or current_user.email == talk.speaker_email
@@ -505,12 +660,14 @@ def show_institution(shortname):
     query = {"institutions": {"$contains": shortname}}
     if not current_user.is_admin:
         query["display"] = True
-    events = list(seminars_search(
-        query, sort=["weekday", "start_time", "name"], organizer_dict=all_organizers(),
-    ))
+    events = list(
+        seminars_search(
+            query, sort=["weekday", "start_time", "name"], organizer_dict=all_organizers(),
+        )
+    )
     seminars = [S for S in events if not S.is_conference]
     conferences = [S for S in events if S.is_conference]
-    conferences.sort(key=lambda S:(S.start_date, S.name))
+    conferences.sort(key=lambda S: (S.start_date, S.name))
     return render_template(
         "institution.html",
         seminars=seminars,
@@ -522,15 +679,22 @@ def show_institution(shortname):
     )
 
 
-
 @app.route("/info")
 def info():
     return render_template("info.html", title="Features", section="Info", subsection="features")
 
+@app.route("/privacy")
+def privacy():
+    return render_template("privacy.html", title="Privacy policy", section="Info", subsection="privacy")
+
+@app.route("/policies")
+def policies():
+    return render_template("policies.html", title="Policies", section="Info", subsection="policies")
+
 
 @app.route("/faq")
 def faq():
-    return render_template("faq.html", title="FAQ", section="Info", subsection="faq")
+    return render_template("faq.html", title="Frequently asked questions", section="Info", subsection="faq")
 
 
 # @app.route("/<topic>")

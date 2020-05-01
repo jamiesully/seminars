@@ -6,7 +6,7 @@ import bcrypt
 import urllib.parse
 from seminars import db
 from seminars.tokens import generate_token
-from seminars.seminar import WebSeminar, seminars_search
+from seminars.seminar import WebSeminar, seminars_search, next_talk_sorted
 from seminars.talk import WebTalk
 from seminars.utils import pretty_timezone
 from lmfdb.backend.searchtable import PostgresSearchTable
@@ -24,19 +24,19 @@ from flask_login import UserMixin, AnonymousUserMixin
 from flask import request, url_for
 from email_validator import validate_email, EmailNotValidError
 
+
 def ilike_escape(email):
     # only do this after validation
-    assert '\\' not in email
-    return email.replace('%',r'\%').replace('_',r'\_')
+    assert "\\" not in email
+    return email.replace("%", r"\%").replace("_", r"\_")
+
 
 def ilike_query(email):
     if isinstance(email, str):
-        return {'$ilike': ilike_escape(email)}
+        return {"$ilike": ilike_escape(email)}
     else:
         # no email, no query
         return None
-
-
 
 
 class PostgresUserTable(PostgresSearchTable):
@@ -94,7 +94,7 @@ class PostgresUserTable(PostgresSearchTable):
 
     def change_password(self, email, newpwd):
         self.update(
-            query={'email': ilike_query(email)},
+            query={"email": ilike_query(email)},
             changes={"password": self.bchash(newpwd)},
             resort=False,
             restat=False,
@@ -104,21 +104,18 @@ class PostgresUserTable(PostgresSearchTable):
     def lookup(self, email, projection=2):
         if not email:
             return None
-        return self.lucky({'email': ilike_query(email) }, projection=projection, sort=[])
-
+        return self.lucky({"email": ilike_query(email)}, projection=projection, sort=[])
 
     def user_exists(self, email):
         if not email:
             return False
         return self.lucky({"email": ilike_query(email)}, projection="id") is not None
 
-
     def authenticate(self, email, password):
         bcpass = self.lookup(email, projection="password")
         if bcpass is None:
             raise ValueError("User not present in database!")
         return bcpass == self.bchash(password, existing_hash=bcpass)
-
 
     def make_creator(self, email, endorser):
         with DelayCommit(self):
@@ -154,7 +151,8 @@ class PostgresUserTable(PostgresSearchTable):
                 return False
         for key in list(data):
             if key not in self.search_cols:
-                critical("Need to update pwdmanager code to account for schema change key=%s" % key)
+                if key != "id":
+                    critical("Need to update pwdmanager code to account for schema change key=%s" % key)
                 data.pop(key)
         with DelayCommit(db):
             if "email" in data:
@@ -166,6 +164,17 @@ class PostgresUserTable(PostgresSearchTable):
             self.update({"email": ilike_query(email)}, data)
         return True
 
+    def delete(self, data):
+        # We keep the uid in the users table (so that it doesn't get reused), but remove all personal information
+        uid = data["id"]
+        email = data["email"]
+        with DelayCommit(db):
+            # We probably have code that assumes that admin/owner isn't None....
+            db.institutions.update({"admin": ilike_query(email)}, {"admin": "mathseminars-dev@googlegroups.com"})
+            db.seminars.update({"owner": ilike_query(email)}, {"owner": "mathseminars-dev@googlegroups.com"})
+            db.seminar_organizers.delete({"email": ilike_query(email)})
+            db.talks.update({"speaker_email": ilike_query(email)}, {"speaker_email": ""})
+            self.update({"id": uid}, {key: None for key in self.search_cols})
 
 userdb = PostgresUserTable()
 
@@ -181,7 +190,7 @@ class SeminarsUser(UserMixin):
         if email:
             if not isinstance(email, str):
                 raise Exception("Email is not a string, %s" % email)
-            query = {'email': ilike_query(email)}
+            query = {"email": ilike_query(email)}
         else:
             query = {"id": int(uid)}
 
@@ -195,27 +204,29 @@ class SeminarsUser(UserMixin):
             self._authenticated = True
             self._data.update(user_row)
             self._uid = str(self._data["id"])
-            self._organizer = db.seminar_organizers.count({"email": ilike_query(self.email)}, record=False) > 0
+            self._organizer = (
+                db.seminar_organizers.count({"email": ilike_query(self.email)}, record=False) > 0
+            )
             self.try_to_endorse()
-
-
 
     def try_to_endorse(self):
         if self.email_confirmed and not self.is_creator:
             preendorsed = db.preendorsed_users.lucky({"email": ilike_query(self.email)})
             if preendorsed:
-                self.endorser = preendorsed['endorser'] # must set endorser first
-                self.creator = True # it already saves
+                self.endorser = preendorsed["endorser"]  # must set endorser first
+                self.creator = True  # it already saves
                 db.preendorsed_users.delete({"email": ilike_query(self.email)})
                 return True
             # try to endorse if the user is the organizer of some seminar
             if self._organizer:
-                shortname = db.seminar_organizers.lucky({"email": ilike_query(self.email)}, 'seminar_id')
-                for owner in seminars_search({'shortname': shortname}, 'owner'):
-                    owner = userdb.lookup(owner, ['creator', 'id'])
-                    if owner and owner.get('creator'):
-                        self.endorser = owner['id'] # must set endorser first
-                        self.creator = True # it already saves
+                shortname = db.seminar_organizers.lucky(
+                    {"email": ilike_query(self.email)}, "seminar_id"
+                )
+                for owner in seminars_search({"shortname": shortname}, "owner"):
+                    owner = userdb.lookup(owner, ["creator", "id"])
+                    if owner and owner.get("creator"):
+                        self.endorser = owner["id"]  # must set endorser first
+                        self.creator = True  # it already saves
                         return True
 
         return False
@@ -292,7 +303,7 @@ class SeminarsUser(UserMixin):
         try:
             return timezone(self.timezone)
         except UnknownTimeZoneError:
-            return timezone('UTC')
+            return timezone("UTC")
 
     def show_timezone(self, dest="topmenu"):
         # dest can be 'browse', in which case "now" is inserted, or 'selecter', in which case fixed width is used.
@@ -325,6 +336,7 @@ class SeminarsUser(UserMixin):
         self._data["location"] = location
         self._dirty = True
 
+
     @property
     def ics(self):
         return generate_token(self.id, "ics")
@@ -356,6 +368,7 @@ class SeminarsUser(UserMixin):
             except ValueError:
                 self._data["seminar_subscriptions"].remove(elt)
                 self._dirty = True
+        ans = next_talk_sorted(ans)
         if self._dirty:
             self.save()
         return ans
@@ -451,6 +464,13 @@ class SeminarsUser(UserMixin):
     def is_admin(self):
         return self._data.get("admin", False)
 
+    def is_subject_admin(self, talk_or_seminar):
+        if self.is_admin:
+            return True
+        sa = self._data.get("subject_admin")
+        subjects = talk_or_seminar.subjects
+        return sa and (not subjects or sa in subjects)
+
     @property
     def is_creator(self):
         return self._data.get("creator", False)
@@ -465,17 +485,12 @@ class SeminarsUser(UserMixin):
         self._dirty = True
         if creator:
             assert self.endorser is not None
-            userdb.make_creator(self.email, int(self.endorser)) # it already saves
-            flash("Someone endorsed you! You can now create seminars.", "success")
+            userdb.make_creator(self.email, int(self.endorser))  # it already saves
+            flash("Someone endorsed you! You can now create series.", "success")
 
     @property
     def is_organizer(self):
-        return (
-            self.is_admin
-            or self.is_creator
-            or self._organizer
-        )
-
+        return self.id and (self.is_admin or self.is_creator or self._organizer)
 
     def check_password(self, pwd):
         """
@@ -486,7 +501,7 @@ class SeminarsUser(UserMixin):
             logger.warning("no password data in db for '%s'!" % self.email)
             return False
         try:
-             return userdb.authenticate(self.email, pwd)
+            return userdb.authenticate(self.email, pwd)
         except ValueError:
             return False
 
@@ -500,6 +515,9 @@ class SeminarsUser(UserMixin):
 
         self._dirty = False
         return True
+
+    def delete(self):
+        userdb.delete(self._data)
 
 class SeminarsAnonymousUser(AnonymousUserMixin):
     """
@@ -531,11 +549,18 @@ class SeminarsAnonymousUser(AnonymousUserMixin):
     def is_admin(self):
         return False
 
+    def is_subject_admin(self, talk_or_seminar):
+        return False
+
     def get_id(self):
         return
 
     @property
     def email(self):
+        return None
+
+    @property
+    def homepage(self):
         return None
 
     @property
@@ -552,6 +577,7 @@ class SeminarsAnonymousUser(AnonymousUserMixin):
             return timezone(self.timezone)
         except UnknownTimeZoneError:
             return timezone("UTC")
+
 
     @property
     def email_confirmed(self):
