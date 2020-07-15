@@ -18,13 +18,26 @@ If you are seeking an endorsement, ask someone on <a href="{{ url_for('user.publ
 {% endif %}
 
 <div class="talk-body">
+  {% if talk.is_past() %}
     <b>{{ talk.show_time_and_duration() | safe }}</b>
-    {% if not talk.is_past() %}
-      {% if talk.room %}
-        <br>Lecture held in {{ talk.room }}.
-      {% endif %}
-      {{ talk.show_live_link() | safe }}
-    {% endif %}
+  {% else %}
+    <table style="left-margin:0px;">
+      <tr>
+        <td style="left-margin:0px;" nowrap><b>{{ talk.show_time_and_duration() | safe }}</b></td>
+        <td nowrap>
+          {% set live_link = talk.show_live_link() %}
+          {% if live_link %}
+            {{ live_link | safe }} {{ talk.show_password_hint() | safe }}
+          {% else %}
+            {{ talk.show_stream_link() | safe }}
+          {% endif %}
+        </td>
+      </tr><tr>
+        <td>{% if talk.room %} Lecture held in {{ talk.room }}. {% endif %}</td>
+        <td>{% if live_link %} {{ talk.show_stream_link() | safe }} {% endif %}</td>
+      </tr>
+    </table>
+  {% endif %}
 
   <div style="clear:both;"></div>
 
@@ -34,18 +47,17 @@ If you are seeking an endorsement, ask someone on <a href="{{ url_for('user.publ
   {% endif %}
 
   {% if talk.language != "en" or talk.topics %}
-  <p>
-    {{talk.show_lang_topics() | safe}}
-  </p>
+  <p>{{ talk.show_lang_topics() | safe }}</p>
   {% endif %}
+  <p>Audience: {{ talk.show_audience() | safe }}</p>
 
-  {% if talk.paper_link or talk.slides_link or talk.video_link %}
-  <p>{{talk.show_content_links() | safe}}</p>
+  {% set content_links = talk.show_content_links() %}
+  {% if content_links %}
+  <p>{{ content_links | safe}}</p>
   {% endif %}
 
   {% if talk.comments and talk.comments != talk.seminar.comments %}
-  <p><b>Comments </b></p>
-  {{talk.show_comments() | safe}}
+  {{talk.show_comments(prefix="<b>Comments: </b>") | safe}}
   {% endif %}
 
   <hr>
@@ -56,15 +68,26 @@ If you are seeking an endorsement, ask someone on <a href="{{ url_for('user.publ
 
   {% if talk.seminar.comments %}
 
-  <p><b>Series comments</b></p>
-  {{talk.seminar.show_comments() | safe}}
+  {{talk.seminar.show_comments(prefix="<b>Series comments: </b>") | safe}}
   {% endif %}
 
-  <div style="font-size: 90%;">
+  <div>
     <table>
-      {{ seminar.show_organizers() | safe }}
-      {{ seminar.show_curators() | safe }}
-      <tr><td></td><td class="forminfo">*contact</td></tr>
+      {% set n = seminar.num_visible_organizers() %}
+      {% if n > 0 %}
+      <tr>
+        <td style="padding:0px;">Organizer{%if n > 1 %}s{% endif %}:</td>
+        <td>{{ seminar.show_organizers() | safe }}</td>
+      </tr>
+      {% endif %}
+      {% set n = seminar.num_visible_curators() %}
+      {% if n > 0 %}
+      <tr>
+        <td style="padding:0px;">Curator{%if n > 1 %}s{% endif %}:</td>
+        <td>{{ seminar.show_curators() | safe }}</td>
+      </tr>
+      {% endif %}
+      <tr><td style="padding:0px;"></td><td class="forminfo">*contact for this listing</td></tr>
     </table>
   </div>
   <hr>
@@ -74,5 +97,22 @@ If you are seeking an endorsement, ask someone on <a href="{{ url_for('user.publ
 </div>
 
 {{ calendar_block('talk', talk) }}
+
+{% if talk.online and talk.access_control == 4 and (user.email in talk.seminar.editors() or user.is_subject_admin(talk)) %}
+<br>
+<div>
+<table>
+<tr><th colspan="3" style="align: center;"><u>Users registered for this talk</u></th></tr>
+<tr><th>Name</th><th>Affiliation</th><th>Registration</th></tr>
+{% for name, homepage, affiliation, time in talk.registered_users() %}
+  <tr>
+    <td>{% if homepage %}<a href="{{homepage}}">{{name}}</a>{% else %} {{name}} {% endif %}</td>
+    <td>{{ affiliation }}</td>
+    <td>{{ time.strftime("%a %b %-d, %H:%M") }}</td>
+  </tr>
+{% endfor %}
+</table>
+</div>
+{% endif %}
 
 {% endblock %}

@@ -1,10 +1,20 @@
 {% extends "base.html" %}
 
-
-
 {%- from "macros.html" import KNWOL, ASTKNOWL, calendar_block, prevent_unsaved with context -%}
 
 {% block body -%}
+<!--<div class="banner">
+  <header class="inner">
+    <div style="padding: 8px 40px;">
+      We at researchseminars.org, in solidarity with the
+      <a class="banner" href="https://www.particlesforjustice.org/">#Strike4BlackLives</a> and <a class="banner" href="https://www.shutdownstem.com/">#ShutDownSTEM</a>
+      movements on June 10, 2020, acknowledge the racism present throughout academia and
+      especially in STEM subjects, and urge organizers who have talks
+      scheduled that day to consider these movements.  We added an option on the Edit talk page for organizers to reschedule a talk.
+    </div>
+  </header>
+</div>-->
+
 <div id="header">
   <header class="inner">
     <div id="logo">
@@ -13,7 +23,7 @@
     <div class="right">
       <div class="upper">
         <div id="title">{{ title|safe }}</div>
-        <div id="domain"> {{ topdomain }} {% if 'mathseminars' in topdomain  %}(beta){% else %}(test){%endif%}</div>
+        <div id="domain"> {{ domain }} (beta)</div>
         <div id="top-menu">
         {% for url, onclick, label in top_menu -%}
           <div {% if section == label %} class="menu-active"{% endif %}><a href="{{url}}"{% if onclick %} onclick="{{onclick}}"{% endif %}>{{label}}</a></div>
@@ -31,73 +41,31 @@
 </div>
 
 {% if section == "Browse" %}
-  <div id="subject-filter-menu">
-    <span id="close-subject-btn" onclick="toggleFilterView(this.id);"><i class="fa fa-times close"></i></span>
-    {% for ab, name in subjects %}
-      <div class="subject_toggle" id="subjectlink-{{ab}}">
-        {{name}}
-        {% if subject_counts[ab] %} ({{subject_counts[ab]}}) {% endif %}
+ <form id="browseform" action="{{ url_for('index') }}">
+  <div id="browse-submenu">
+    <header class="inner">
+      <div class="submenu-inner">
+       <script>function mysubmit(s, section){document.getElementById(s+"_button").value = s + " " + $('input[name="keywords"]')[0].value; return false; }</script>
+        <div class="submenu-nav{% if subsection == 'talks' %} submenu-active{% endif %}">
+          <button type="submit" name="submit" onclick="mysubmit('talks')" id="talks_button">Talks</button>
+        </div>
+        <div class="submenu-nav{% if subsection == 'conferences' %} submenu-active{% endif %}">
+          <button type="submit" name="submit" onclick="mysubmit('conferences')" id="conferences_button">Conferences</button>
+        </div>
+        <div class="submenu-nav{% if subsection == 'seminar_series' %} submenu-active{% endif %}">
+          <button type="submit" name="submit" onclick="mysubmit('seminar_series')" id="seminar_series_button">Seminar series</button>
+        </div>
+        <div class="submenu-nav{% if subsection == 'past_talks' %} submenu-active{% endif %}">
+          <button type="submit" name="submit" onclick="mysubmit('past_talks')" id="past_talks_button">Past talks</button>
+        </div>
+        <div class="submenu-nav{% if subsection == 'past_conferences' %} submenu-active{% endif %}">
+          <button type="submit" name="submit" onclick="mysubmit('past_conferences')" id="past_conferences_button">Past conferences</button>
+        </div>
       </div>
-    {% endfor %}
+    </header>
   </div>
+</form>
 
-  <div id="topic-filter-menu">
-    {% if topdomain == "mathseminars.org" %}
-    {% for ab, name, topic_subject in topics %}
-    {% if topic_subject == "math" %}
-    <div class="topic_toggle subject-math" id="topiclink-math_{{ab}}">
-      {{name}}
-      {% if topic_counts["math_"+ab] %} ({{topic_counts["math_"+ab]}}){% endif %}
-    </div>
-    {% endif %}
-    {% endfor %}
-    <div id="topic-filter-head">
-      {% for ab, name, onclick in [("ALL", "Select all", "selectAllTopics('math');"), ("CLR", "Clear all", "clearAllTopics('math');")] %}
-      <div class="topic_cmd" id="topiclink-math_{{ab}}" onclick="{{onclick}}">
-        {{name}}
-      </div>
-      {% endfor %}
-    </div>
-    {% else %}
-    <div id="subjects-tabs">
-      <ul class="tab-subject-nav">
-        <li><span id="close-topic-btn" onclick="toggleFilterView(this.id);"><i class="fa fa-times close"></i></span></li>
-        {% for ab, name in subjects %}
-          <li><a href="#tab-{{ab}}-content" class="tab-subject-nav">{{name}}</a></li>
-        {% endfor %}
-      </ul>
-
-     {% for subject_ab, subject_name in subjects %}
-       <div id="tab-{{subject_ab}}-content" class="tab-subject-panel">
-         {% for ab, name, topic_subject in topics %}
-           {% if topic_subject == subject_ab %}
-             <div class="topic_toggle subject-{{topic_subject}}" id="topiclink-{{subject_ab}}_{{ab}}">
-               {{name}}
-               {% if topic_counts[subject_ab+"_"+ab] %} ({{topic_counts[subject_ab+"_"+ab]}}){% endif %}
-             </div>
-           {% endif %}
-         {% endfor %}
-         <div id="topic-filter-head">
-          {% for ab, name, onclick in [("ALL", "Select all", "selectAllTopics('"+subject_ab+"');"), ("CLR", "Clear all", "clearAllTopics('"+subject_ab+"');")] %}
-            <div class="topic_cmd" id="topiclink-{{subject_ab}}_{{ab}}" onclick="{{onclick}}">
-              {{name}}
-            </div>
-          {% endfor %}
-         </div>
-      </div>
-    {% endfor %}
-    </div>
-    {% endif %}
-  </div>
-
-  <div id="language-filter-menu">
-    <span id="close-language-btn" onclick="toggleFilterView(this.id);"><i class="fa fa-times close"></i></span>
-    {% for ab, name in languages %}
-      <div class="language_toggle" id="langlink-{{ab}}">
-        {{name}} ({{language_counts[ab]}})
-      </div>
-    {% endfor %}
-  </div>
 {% elif section in ["Manage", "Create"] %}
   <div id="manage-submenu">
     <header class="inner">
@@ -106,7 +74,7 @@
           <div class="submenu-nav{% if subsection == 'home' %} submenu-active{% endif %}">
             <a href="{{ url_for('create.index') }}">Series</a>
           </div>
-          {% if not subsection in ['view', 'editsem', 'schedule', 'viewtalk', 'edittalk'] %}
+          {% if not seminar and not subsection in ['view', 'editsem', 'schedule', 'viewtalk', 'edittalk'] %}
             <div class="submenu-nav{% if subsection == 'institutions' %} submenu-active{% endif %}">
               <a href="{{ url_for('list_institutions') }}">Institutions</a>
             </div>
@@ -118,7 +86,7 @@
           </div>
           {% if user.is_admin or user.email == institution.admin %}
             <div class="submenu-nav{% if subsection == 'editinst' %} submenu-active{% endif %}">
-              <a href="{{ url_for('create.edit_institution', shortname=institution.shortname) }}">Edit properties</a>
+              <a href="{{ url_for('create.edit_institution', shortname=institution.shortname) }}">Edit institution</a>
             </div>
           {% endif %} {# institution admin #}
         {% elif seminar and seminar.user_can_edit() %}
@@ -128,13 +96,13 @@
             </div>
           {% endif %} {# seminar.new #}
           <div class="submenu-nav{% if subsection == 'editsem' %} submenu-active{% endif %}">
-            <a href="{{ url_for('create.edit_seminar', shortname=seminar.shortname) }}">{% if seminar.new %}Create{% else %}Edit{% endif %} {% if subsection in ['edittalk', 'viewtalk'] %}series{% else %}properties{% endif %}</a>
+            <a href="{{ url_for('create.edit_seminar', shortname=seminar.shortname) }}">{% if seminar.new %}Create{% else %}Edit{% endif %} series</a>
           </div>
           <div class="submenu-nav{% if subsection == 'view' %} submenu-active{% endif %}">
             <a href="{{ url_for('show_seminar', shortname=seminar.shortname) }}">View series</a>
           </div>
         {% endif %} {# institution/seminar #}
-        {% if talk %}
+        {% if talk and not talk.deleted %}
           <div class="submenu-nav{% if subsection == 'edittalk' %} submenu-active{% endif %}">
             {% if talk.seminar.user_can_edit() %}
             <a href="{{ url_for('create.edit_talk', seminar_id=talk.seminar.shortname, seminar_ctr=talk.seminar_ctr) }}">Edit talk</a>
@@ -144,9 +112,9 @@
           </div>
           <div class="submenu-nav{% if subsection == 'viewtalk' %} submenu-active{% endif %}">
             {% if talk.seminar.user_can_edit() %}
-              <a href="{{ url_for('show_talk', semid=talk.seminar.shortname, talkid=talk.seminar_ctr) }}">View talk</a>
+              <a href="{{ url_for('show_talk', seminar_id=talk.seminar.shortname, talkid=talk.seminar_ctr) }}">View talk</a>
             {% else %}
-              <a href="{{ url_for('show_talk', semid=talk.seminar.shortname, talkid=talk.seminar_ctr, token=token) }}">View talk</a>
+              <a href="{{ url_for('show_talk', seminar_id=talk.seminar.shortname, talkid=talk.seminar_ctr, token=token) }}">View talk</a>
             {% endif %}
           </div>
         {% endif %} {# talk #}

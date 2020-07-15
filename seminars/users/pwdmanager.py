@@ -6,9 +6,9 @@ import bcrypt
 import urllib.parse
 from seminars import db
 from seminars.tokens import generate_token
-from seminars.seminar import WebSeminar, seminars_search, next_talk_sorted
+from seminars.seminar import WebSeminar, seminars_search, seminars_lucky, next_talk_sorted
 from seminars.talk import WebTalk
-from seminars.utils import pretty_timezone
+from seminars.utils import pretty_timezone, log_error
 from lmfdb.backend.searchtable import PostgresSearchTable
 from lmfdb.utils import flash_error
 from flask import flash
@@ -17,6 +17,7 @@ from lmfdb.logger import critical
 from datetime import datetime
 from pytz import UTC, all_timezones, timezone, UnknownTimeZoneError
 import bisect
+import secrets
 from .main import logger
 
 # Read about flask-login if you are unfamiliar with this UserMixin/Login
@@ -79,15 +80,23 @@ class PostgresUserTable(PostgresSearchTable):
         if "endorser" not in kwargs:
             kwargs["endorser"] = None
             kwargs["admin"] = kwargs["creator"] = False
+        if "subject_admin" not in kwargs:
+            kwargs["subject_admin"] = None
         for col in ["email_confirmed", "admin", "creator"]:
             kwargs[col] = kwargs.get(col, False)
         kwargs["talk_subscriptions"] = kwargs.get("talk_subscriptions", {})
         kwargs["seminar_subscriptions"] = kwargs.get("seminar_subscriptions", [])
         for col in ["name", "affiliation", "homepage", "timezone"]:
-            kwargs[col] = tz = kwargs.get(col, "")
+            kwargs[col] = kwargs.get(col, "")
+        tz = kwargs.get("timezone", "")
         assert tz == "" or tz in all_timezones
-        kwargs["location"] = None
+        kwargs["api_access"] = kwargs.get("api_access", 0)
+        kwargs["api_token"] = kwargs.get("api_token", secrets.token_urlsafe(32))
         kwargs["created"] = datetime.now(UTC)
+        if "external_ids" not in kwargs:
+            kwargs["external_ids"] = []
+        if sorted(list(kwargs) + ['id']) != sorted(self.col_type):
+            log_error("Columns for user creation do not match, %s != %s" % (sorted(list(kwargs) + ['id']), sorted(self.col_type)))
         self.insert_many([kwargs], restat=False)
         newuser = SeminarsUser(email=email)
         return newuser
@@ -123,8 +132,6 @@ class PostgresUserTable(PostgresSearchTable):
             # Update all of this user's created seminars and talks
             db.seminars.update({"owner": ilike_query(email)}, {"display": True})
             # Could do this with a join...
-            from seminars.seminar import seminars_search
-
             for sem in seminars_search({"owner": ilike_query(email)}, "shortname"):
                 db.talks.update({"seminar_id": sem}, {"display": True}, restat=False)
 
@@ -170,11 +177,16 @@ class PostgresUserTable(PostgresSearchTable):
         email = data["email"]
         with DelayCommit(db):
             # We probably have code that assumes that admin/owner isn't None....
-            db.institutions.update({"admin": ilike_query(email)}, {"admin": "mathseminars-dev@googlegroups.com"})
-            db.seminars.update({"owner": ilike_query(email)}, {"owner": "mathseminars-dev@googlegroups.com"})
+            db.institutions.update({"admin": ilike_query(email)}, {"admin": "researchseminars@math.mit.edu"})
+            db.seminars.update({"owner": ilike_query(email)}, {"owner": "researchseminars@math.mit.edu"})
             db.seminar_organizers.delete({"email": ilike_query(email)})
             db.talks.update({"speaker_email": ilike_query(email)}, {"speaker_email": ""})
             self.update({"id": uid}, {key: None for key in self.search_cols}, restat=False)
+
+    def reset_api_token(self, uid):
+        new_token = secrets.token_urlsafe(32)
+        self.update({"id": int(uid)}, {"api_token": new_token}, restat=False)
+        return new_token
 
 userdb = PostgresUserTable()
 
@@ -200,7 +212,7 @@ class SeminarsUser(UserMixin):
         self._authenticated = False
         self._uid = None
         self._dirty = False  # flag if we have to save
-        self._data = dict([(_, None) for _ in SeminarsUser.properties])
+        self._data = dict() # dict([(_, None) for _ in SeminarsUser.properties])
 
         user_row = userdb.lucky(query, projection=SeminarsUser.properties)
         if user_row:
@@ -222,10 +234,9 @@ class SeminarsUser(UserMixin):
                 return True
             # try to endorse if the user is the organizer of some seminar
             if self._organizer:
-                shortname = db.seminar_organizers.lucky(
-                    {"email": ilike_query(self.email)}, "seminar_id"
-                )
-                for owner in seminars_search({"shortname": shortname}, "owner"):
+                shortname = db.seminar_organizers.lucky({"email": ilike_query(self.email)}, "seminar_id")
+                owner = seminars_lucky({"shortname": shortname, "display": True}, "owner")
+                if owner:
                     owner = userdb.lookup(owner, ["creator", "id"])
                     if owner and owner.get("creator"):
                         self.endorser = owner["id"]  # must set endorser first
@@ -330,15 +341,30 @@ class SeminarsUser(UserMixin):
         self._data["endorser"] = endorser
         self._dirty = True
 
+    # @property
+    # def location(self):
+    #     return self._data.get("location", "")
+
+    # @location.setter
+    # def location(self, location):
+    #     self._data["location"] = location
+    #     self._dirty = True
+
+
     @property
-    def location(self):
-        return self._data.get("location", "")
+    def api_token(self):
+        token = self._data.get("api_token")
+        if token is None:
+            token = userdb.reset_api_token(self._uid)
+        return token
 
-    @location.setter
-    def location(self, location):
-        self._data["location"] = location
-        self._dirty = True
-
+    @property
+    def api_access(self):
+        if not self.is_creator:
+            return 0
+        if self.is_admin:
+            return 1
+        return self._data.get("api_access", 0)
 
     @property
     def ics(self):
@@ -471,8 +497,10 @@ class SeminarsUser(UserMixin):
         if self.is_admin:
             return True
         sa = self._data.get("subject_admin")
-        subjects = talk_or_seminar.subjects
-        return sa and (not subjects or sa in subjects)
+        if not talk_or_seminar:
+            return sa
+        topics = talk_or_seminar.topics
+        return sa and sa in topics
 
     @property
     def is_creator(self):
@@ -490,6 +518,15 @@ class SeminarsUser(UserMixin):
             assert self.endorser is not None
             userdb.make_creator(self.email, int(self.endorser))  # it already saves
             flash("Someone endorsed you! You can now create series.", "success")
+
+    @property
+    def external_ids(self):
+        return [ r.split(":") for r in self._data.get("external_ids",[]) ] if self._data.get("external_ids") else []
+
+    @external_ids.setter
+    def external_ids(self, author_ids):
+        self._data["external_ids"] = author_ids
+        self._dirty = True
 
     @property
     def is_organizer(self):
@@ -559,6 +596,14 @@ class SeminarsAnonymousUser(AnonymousUserMixin):
         return
 
     @property
+    def api_token(self):
+        return None
+
+    @property
+    def api_access(self):
+        return 0
+
+    @property
     def email(self):
         return None
 
@@ -580,7 +625,6 @@ class SeminarsAnonymousUser(AnonymousUserMixin):
             return timezone(self.timezone)
         except UnknownTimeZoneError:
             return timezone("UTC")
-
 
     @property
     def email_confirmed(self):

@@ -1,14 +1,15 @@
 {%- from "macros.html" import calendar_block, KNOWL with context -%}
-
 <div class="talk-body">
   <div class="talk-header-container">
       <div class="talk-title">
         <h3>{{ talk.show_title() | safe }}</h3>
         <h3> <i>{{ talk.show_speaker() | safe }}</i></h3>
       </div>
-      <div class="talk-view">
-        ( <a href="{{url_for('show_talk', semid=talk.seminar_id, talkid=talk.seminar_ctr, _external=_external)}}">view</a> {% if talk.user_can_edit() %} | <a href="{{url_for('create.edit_talk', seminar_id=talk.seminar_id, seminar_ctr=talk.seminar_ctr, _external=_external)}}">edit</a> {% endif %} )
-      </div>
+      {% if not talk.deleted %}
+        <div class="talk-view">
+          ( <a href="{{url_for('show_talk', seminar_id=talk.seminar_id, talkid=talk.seminar_ctr, _external=_external)}}">view</a> {% if talk.user_can_edit() %} | <a href="{{url_for('create.edit_talk', seminar_id=talk.seminar_id, seminar_ctr=talk.seminar_ctr, _external=_external)}}">edit</a> {% endif %} )
+        </div>
+      {% endif %}
   </div>
   <div style="clear:both;"></div>
 
@@ -18,43 +19,47 @@
     {% endif %}
 
     {% if talk.language != "en" or talk.topics %}
-      <p>
-        {{talk.show_lang_topics() | safe}}
-      </p>
+      <p>{{ talk.show_lang_topics() | safe }}</p>
     {% endif %}
 
-    {% if talk.paper_link or talk.slides_link or talk.video_link %}
-    <p>{{talk.show_content_links() | safe}}</p>
+    {% set content_links = talk.show_content_links() %}
+    {% if content_links %}
+    <p>{{ content_links | safe}}</p>
     {% endif %}
 
     {% if talk.comments and talk.comments != talk.seminar.comments %}
-    <p><b>Comments</b></p>
-    {{talk.show_comments() | safe}}
+      {{ talk.show_comments(prefix="<b>Comments: </b>") | safe }}
     {% endif %}
 
     <hr>
 
-    <p>
-      <b>{{ talk.show_seminar(external=_external) | safe }} </b>
-    </p>
+    <p><b>{{ talk.show_seminar(external=_external) | safe }}</b></p>
 
     {% if talk.seminar.comments %}
-
-    <p><b>Series comments </b></p>
-    {{talk.seminar.show_comments() | safe}}
+      {{talk.seminar.show_comments(prefix="<b>Series comments: </b>") | safe}}
     {% endif %}
 
     <hr>
 
+    {% if not talk.deleted %}
     {{ calendar_block("talk", talk) }}
+    {% endif %}
 
     <div align="right">
-        <b>{{ talk.show_time_and_duration() | safe }}</b><br>
+        <b>{{ talk.show_time_and_duration(tz=tz) | safe }}</b><br>
         {% if not talk.is_past() %}
-          {% if talk.room %}
-            Lecture held in {{ talk.room }}.
+          {% set room = talk.room %}
+          {% if room %}
+            Lecture held in {{ room }}
           {% endif %}
-          {{ talk.show_live_link() | safe }}
+          {% if not talk.deleted %}
+            {% set stream_link = talk.show_stream_link() %}
+            {% set live_link = talk.show_live_link() %}
+            {% set hint = talk.show_password_hint() %}
+            {{ stream_link | safe }}
+            {% if (room or stream_link) and hint and live_link %}<br>{% endif %}
+            {{ hint | safe }} {{ live_link | safe }}
+          {% endif %}
         {% endif %}
     </div>
   </div>

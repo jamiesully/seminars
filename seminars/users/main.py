@@ -1,6 +1,6 @@
 # -*- encoding: utf-8 -*-
 from __future__ import absolute_import
-import flask
+import flask, re
 from email_validator import validate_email, EmailNotValidError
 from urllib.parse import urlencode, quote
 from functools import wraps
@@ -28,18 +28,23 @@ from markupsafe import Markup
 from seminars import db
 
 from seminars.utils import (
-    format_errmsg,
     ics_file,
+    process_user_input,
+    format_errmsg,
+    format_input_errmsg,
     show_input_errors,
     timestamp,
     timezones,
     topdomain,
-    validate_url,
+    flash_infomsg,
 )
 
 from seminars.tokens import generate_timed_token, read_timed_token, read_token
 from datetime import datetime
 
+def user_options():
+    author_ids = sorted(list(db.author_ids.search({})),key=lambda r: r["name"].lower())
+    return { 'author_ids' : author_ids, 'timezones' : timezones }
 
 login_page = Blueprint("user", __name__, template_folder="templates")
 logger = make_logger(login_page)
@@ -167,8 +172,8 @@ def info():
         next=request.args.get("next", ''),
         title=title,
         section=section,
-        timezones=timezones,
         user=current_user,
+        options=user_options(),
         session=session,
     )
 
@@ -179,12 +184,36 @@ def info():
 @login_page.route("/set_info", methods=["POST"])
 @login_required
 def set_info():
-    homepage = request.form.get("homepage")
-    if homepage and not validate_url(homepage):
-        return show_input_errors([format_errmsg("Homepage %s is not a valid URL, it should begin with http:// or https://", homepage)])
-    for k, v in request.form.items():
-        setattr(current_user, k, v)
+    errmsgs = []
+    data = {}
     previous_email = current_user.email
+    external_ids = []
+    for col, val in request.form.items():
+        if col == "ids":
+            continue
+        try:
+            # handle external id values separately, these are not named columns, they all go in external_ids
+            if col.endswith("_value"):
+                name = col.split("_")[0]
+                value = val.strip()
+                # external id values are validated against regex by the form, but the user can still click update
+                if value:
+                    if not re.match(db.author_ids.lookup(name,"regex"),value):
+                        errmsgs.append(format_input_errmsg("Invalid %s format"%(db.author_ids.lookup(name,"display_name")), val, name))
+                    else:
+                        external_ids.append(name + ":" + value)
+                continue
+            typ = db.users.col_type[col]
+            data[col] = process_user_input(val, col, typ)
+        except Exception as err:  # should only be ValueError's but let's be cautious
+            errmsgs.append(format_input_errmsg(err, val, col))
+    if not data.get("name"):
+        errmsgs.append(format_errmsg('Name cannot be left blank.  See the user behavior section of our <a href="' + url_for('policies') + '" target="_blank">policies</a> page for details.'))
+    if errmsgs:
+        return show_input_errors(errmsgs)
+    data["external_ids"] = external_ids
+    for k in data.keys():
+        setattr(current_user, k, data[k])
     if current_user.save():
         flask.flash(Markup("Thank you for updating your details!"))
     if previous_email != current_user.email:
@@ -219,9 +248,7 @@ def housekeeping(fn):
 
 @login_page.route("/register/", methods=["GET", "POST"])
 def register():
-    if request.method == "GET":
-        return render_template("register.html", title="Register", email="")
-    elif request.method == "POST":
+    if request.method == "POST":
         email = request.form["email"]
         pw1 = request.form["password1"]
         pw2 = request.form["password2"]
@@ -235,12 +262,12 @@ def register():
             return make_response(render_template("register.html", title="Register", email=email))
 
         if len(pw1) < 8:
-            flash_error("Oops, password too short. Minimum 8 characters please!")
+            flash_error("Oops, password too short.  Minimum 8 characters, please!")
             return make_response(render_template("register.html", title="Register", email=email))
 
         password = pw1
         if userdb.user_exists(email=email):
-            flash_error("Sorry, email '%s' is already registered!", email)
+            flash_error("The email address '%s' is already registered!", email)
             return make_response(render_template("register.html", title="Register", email=email))
 
         newuser = userdb.new_user(email=email, password=password,)
@@ -250,6 +277,7 @@ def register():
         flask.flash(Markup("Hello! Congratulations, you are a new user!"))
         logger.info("new user: '%s' - '%s'" % (newuser.get_id(), newuser.email))
         return redirect(url_for(".info"))
+    return render_template("register.html", title="Register", email="")
 
 
 @login_page.route("/change_password", methods=["POST"])
@@ -258,7 +286,7 @@ def change_password():
     email = current_user.email
     pw_old = request.form["oldpwd"]
     if not current_user.check_password(pw_old):
-        flash_error("Ooops, old password is wrong!")
+        flash_error("Oops, old password is wrong!")
         return redirect(url_for(".info"))
 
     pw1 = request.form["password1"]
@@ -268,7 +296,7 @@ def change_password():
         return redirect(url_for(".info"))
 
     if len(pw1) < 8:
-        flash_error("Oops, password too short. Minimum 8 characters please!")
+        flash_error("Oops, password too short.  Minimum 8 characters, please!")
         return redirect(url_for(".info"))
 
     userdb.change_password(email, pw1)
@@ -276,11 +304,11 @@ def change_password():
     return redirect(url_for(".info"))
 
 
-@login_page.route("/logout")
+@login_page.route("/logout", methods=["POST"])
 @login_required
 def logout():
     logout_user()
-    flask.flash(Markup("You are logged out now. Have a nice day!"))
+    flask.flash(Markup("You are now logged out.  Have a nice day!"))
     return redirect(url_for(".info"))
 
 @login_page.route("/permanently_deleteme")
@@ -310,7 +338,7 @@ def loginas(emailorid):
     if user.id:
         logout_user()
         login_user(user)
-        flask.flash(Markup("Using your super powers, you are now logged in as %s" % (user.email)))
+        flask.flash(Markup("Using your superpowers, you are now logged in as %s" % (user.email)))
         return redirect(url_for(".info"))
     else:
         return "No user matches the email/id provided."
@@ -334,7 +362,7 @@ def send_confirmation_email(email):
         import sys
 
         flash_error(
-            'Unable to send email confirmation link, please contact <a href="mailto:mathseminars@math.mit.edu">mathseminars@math.mit.edu</a> directly to confirm your email'
+            'Unable to send email confirmation link; please contact <a href="mailto:researchseminars@math.mit.edu">researchseminars@math.mit.edu</a> directly to confirm your email.'
         )
         app.logger.error("%s unable to send email to %s due to error: %s" % (timestamp(), email, sys.exc_info()[0]))
         return False
@@ -358,7 +386,7 @@ def confirm_email(token):
         else:
             current_user.email_confirmed = True
             current_user.save()
-            flask.flash("You have confirmed your email. Thanks!", "success")
+            flask.flash("Thank you for confirming your email!", "success")
     return redirect(url_for(".info"))
 
 
@@ -379,14 +407,13 @@ def send_reset_password(email):
 
 @login_page.route("/reset_password", methods=["GET", "POST"])
 def reset_password():
-    if request.method == "GET":
-        return render_template("reset_password_ask_email.html", title="Forgot Password",)
-    elif request.method == "POST":
+    if request.method == "POST":
         email = request.form["email"]
         if userdb.user_exists(email):
             send_reset_password(email)
-        flask.flash(Markup("Check your mailbox for instructions on how to reset your password"))
+        flask.flash(Markup("Check your email's inbox for instructions on how to reset your password."))
         return redirect(url_for(".info"))
+    return render_template("reset_password_ask_email.html", title="Forgot Password",)
 
 
 @login_page.route("/reset/<token>", methods=["GET", "POST"])
@@ -400,9 +427,7 @@ def reset_password_wtoken(token):
     if not userdb.user_exists(email):
         flash_error("The link is invalid or has expired.")
         return redirect(url_for(".info"))
-    if request.method == "GET":
-        return render_template("reset_password_wtoken.html", title="Reset password", token=token)
-    elif request.method == "POST":
+    if request.method == "POST":
         pw1 = request.form["password1"]
         pw2 = request.form["password2"]
         if pw1 != pw2:
@@ -410,13 +435,20 @@ def reset_password_wtoken(token):
             return redirect(url_for(".reset_password_wtoken", token=token))
 
         if len(pw1) < 8:
-            flash_error("Oops, password too short. Minimum 8 characters please!")
+            flash_error("Oops, password too short.  Minimum 8 characters, please!")
             return redirect(url_for(".reset_password_wtoken", token=token))
 
         userdb.change_password(email, pw1)
-        flask.flash(Markup("Your password has been changed. Please login with your new password."))
+        flask.flash(Markup("Your password has been changed.  Please login with your new password."))
         return redirect(url_for(".info"))
+    return render_template("reset_password_wtoken.html", title="Reset password", token=token)
 
+
+@login_page.route("/reset_api_token")
+@creator_required
+def reset_api_token():
+    userdb.reset_api_token(current_user._uid)
+    return redirect(url_for(".info"))
 
 # endorsement
 
@@ -424,7 +456,7 @@ def reset_password_wtoken(token):
 @login_page.route("/endorse", methods=["POST"])
 @creator_required
 def get_endorsing_link():
-    email = request.form["email"]
+    email = request.form["email"].strip()
     try:
         email = validate_email(email)["email"]
     except EmailNotValidError as e:
@@ -433,7 +465,8 @@ def get_endorsing_link():
     rec = userdb.lookup(email, ["name", "creator", "email_confirmed"])
     if rec is None or not rec["email_confirmed"]:  # No account or email unconfirmed
         if db.preendorsed_users.count({'email':email}):
-            endorsing_link = "<p>{0} has already been pre-endorsed.</p>".format(email)
+            flash_infomsg("The email address %s has already been pre-endorsed.", email)
+            return redirect(url_for(".info"))
         else:
             db.preendorsed_users.insert_many([{"email": email, "endorser": current_user._uid}])
             to_send = """Hello,
@@ -463,7 +496,7 @@ def get_endorsing_link():
             }
             endorsing_link = """
     <p>
-    When {email} registers and confirms their email they will be able to create content.</br>
+    The person {email} will be able to create content after registering and confirming the email address.</br>
     <button onClick="window.open('mailto:{email}?{msg}')">
     Send email
     </button> to let them know.
@@ -471,10 +504,15 @@ def get_endorsing_link():
     """.format(
                 email=email, msg=urlencode(data, quote_via=quote)
             )
+        flash_infomsg("""
+            The person %s will be able to create content after registering and confirming the email address.  Click the "Send email" button below to let them know.""",email)
+        session["endorsing link"] = endorsing_link
+        return redirect(url_for(".info"))
     else:
         target_name = rec["name"]
         if rec["creator"]:
-            endorsing_link = "<p>{target_name} is already able to create content.</p>".format(target_name=target_name)
+            flash_infomsg("%s is already able to create content.", target_name)
+            return redirect(url_for(".info"))
         else:
             welcome = "Hello" if not target_name else ("Dear " + target_name)
             to_send = """{welcome},<br>
@@ -493,12 +531,9 @@ Thanks for using {topdomain}!
             subject = "Endorsement to create content on " + topdomain()
             send_email(email, subject, to_send)
             userdb.make_creator(email, int(current_user.id))
-            endorsing_link = "<p>{target_name} is now able to create content.</p> ".format(
-                target_name=target_name if target_name else email
-            )
-    session["endorsing link"] = endorsing_link
-    return redirect(url_for(".info"))
-
+            flash_infomsg("%s is now able to create content.", target_name if target_name else email)
+            return redirect(url_for(".info"))
+    raise Exception("The function get_endorsing_link did not return a value")
 
 def generate_endorsement_token(endorser, email):
     rec = [int(endorser.id), email]
@@ -564,11 +599,16 @@ def talk_subscriptions_remove(shortname, ctr):
 
 @login_page.route("/ics/<token>")
 def user_ics_file(token):
+    from itsdangerous.exc import BadSignature
     try:
-        uid = read_token(token, "ics")
+        try:
+            uid = read_token(token, "ics")
+        except BadSignature:
+            # old key
+            return flask.abort(404, "Invalid link")
         user = SeminarsUser(uid=int(uid))
         if not user.email_confirmed:
-            return flask.abort(404, "The email has not yet been confirmed!")
+            return flask.abort(404, "The email address has not yet been confirmed!")
     except Exception:
         return flask.abort(404, "Invalid link")
 
@@ -581,7 +621,7 @@ def user_ics_file(token):
             talks.append(talk)
     return ics_file(
         talks=talks,
-        filename="semianars.ics",
+        filename="seminars.ics",
         user=user)
 
 
@@ -593,7 +633,13 @@ def public_users():
     user_list = sorted(
         [
             (r["affiliation"], r["name"], r["homepage"])
-            for r in db.users.search({"homepage": {"$ne": ""}, "name": {"$ne": ""}, "creator": True})
+            for r in db.users.search({"homepage": {"$ne": ""}, "affiliation": {"$ne": ""}, "name": {"$ne": ""}, "creator": True})
+        ]
+    )
+    user_list += sorted(
+        [
+            (r["affiliation"], r["name"], r["homepage"])
+            for r in db.users.search({"homepage": {"$ne": ""}, "affiliation":"", "name": {"$ne": ""}, "creator": True})
         ]
     )
     return render_template("public_users.html", title="Public users", public_users=user_list)

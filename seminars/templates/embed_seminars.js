@@ -43,7 +43,8 @@
     if (!shortname)
       return;
 
-    var fetchURL  = "{{ url_for('show_seminar_bare', shortname='_SHORTNAME_', _external=True, _scheme=scheme) }}".replace('_SHORTNAME_', shortname) ;
+    var fetchURL  = "{{ url_for('show_seminar_bare', shortname='_SHORTNAME_', _external=True, _scheme=scheme) }}".replace('_SHORTNAME_', shortname);
+
 
     var daterange = target.getAttribute('daterange');
 
@@ -62,6 +63,11 @@
     if (target.hasAttribute('sitefooter')) {
       fetchURL += "&site_footer=";
     };
+
+    var timezone = target.getAttribute('timezone');
+    if ( timezone ) {
+      fetchURL += "&timezone=" + timezone;
+    }
 
     var xhr = new XMLHttpRequest();
     xhr.responseType = "document";
@@ -139,7 +145,7 @@
       };
     };
 
-    head.appendChild(link);
+    head.insertBefore(link, head.firstChild);
   }
 
   SeminarEmbedder.prototype.addJS = function(src, opts) {
@@ -175,6 +181,10 @@
                 {"integrity": "sha384-yFRtMMDnQtDRO8rLpMIKrtPCD5jdktao2TV19YiZYWMDkUR5GQZR/NOVTdquEx1j",
                  "crossOrigin": "anonymous"});
     self.addCSS("https://cdn.jsdelivr.net/npm/katex@0.10.2/dist/contrib/copy-tex.css");
+
+
+    self.addCSS("{{ url_for('static', filename='fontawesome/css/all.min.css', _external=True, _scheme=scheme) }}");
+
 
 
     self.addJS("{{ url_for('static', filename='katex-custom.js', _external=True, _scheme=scheme) }}",
@@ -231,7 +241,7 @@
       return;
 
     if (opts && opts.hasOwnProperty('addCSS') && opts['addCSS']) {
-      this.addCSS("{{ url_for('css', _external=True, _scheme=scheme) }}");
+      this.addCSS("{{ url_for('static', filename='embed_seminar.css', _external=True, _scheme=scheme) }}");
     };
 
     // addKatex is idempotent

@@ -17,11 +17,11 @@ institution_types = [
 ]
 
 
-def institutions():
+def institutions(query={}):
     return sorted(
         (
             (rec["shortname"], rec["name"])
-            for rec in db.institutions.search({}, ["shortname", "name"])
+            for rec in db.institutions.search(query, ["shortname", "name"])
         ),
         key=lambda x: x[1].lower(),
     )
@@ -48,11 +48,13 @@ def clean_institutions(inp):
 
 def institution_known(institution):
     matcher = {"$like": "%{0}%".format(institution)}
-    return db.institutions.count({"$or": [{"shortname": matcher}, {"name": matcher}, {"aliases": matcher}]}) > 0
+    return db.institutions.count({"$or": [{"shortname": matcher}, {"name": matcher}]}) > 0
 
 
 class WebInstitution(object):
-    def __init__(self, shortname, data=None, editing=False, showing=False, saving=False):
+    def __init__(self, shortname, data=None, editing=False, showing=False, saving=False, user=None):
+        if user is None:
+            user = current_user
         if data is None and not editing:
             data = db.institutions.lookup(shortname, projection=3)
             if data is None:
@@ -62,7 +64,7 @@ class WebInstitution(object):
             self.shortname = shortname
             self.type = "university"
             self.timezone = "US/Eastern"
-            self.admin = current_user.email
+            self.admin = user.email
             for key, typ in db.institutions.col_type.items():
                 if key == "id" or hasattr(self, key):
                     continue
@@ -91,9 +93,11 @@ class WebInstitution(object):
     def __ne__(self, other):
         return not (self == other)
 
-    def save(self):
+    def save(self, user=None):
+        if user is None:
+            user = current_user
         data = {col: getattr(self, col, None) for col in db.institutions.search_cols}
-        data["edited_by"] = int(current_user.id)
+        data["edited_by"] = int(user.id)
         data["edited_at"] = datetime.now(tz=pytz.UTC)
         if self.new:
             db.institutions.insert_many([data])
@@ -106,21 +110,25 @@ class WebInstitution(object):
         link = rec["homepage"] if rec["homepage"] else "mailto:%s" % rec["email"]
         return '<a href="%s"><i>%s</i></a>' % (link, "Contact this page's maintainer.")
 
-def can_edit_institution(shortname, new):
+def can_edit_institution(shortname, name, new):
     if not allowed_shortname(shortname) or len(shortname) < 2 or len(shortname) > 32:
         flash_error(
             "The identifier must be 2 to 32 characters in length and can include only letters, numbers, hyphens and underscores."
         )
         return redirect(url_for("list_institutions"), 302), None
+    # We don't allow backticks so that we can use them to delimit strings in javascript
+    if "`" in name:
+        flash_error("The name must not include backticks")
+        return redirect(url_for("list_institutions"), 302), None
     institution = db.institutions.lookup(shortname)
     # Check if institution exists
     if new != (institution is None):
         flash_error("Identifier %s %s" % (shortname, "already exists" if new else "does not exist"))
-        return redirect(url_for(".index"), 302), None
+        return redirect(url_for("list_institutions"), 302), None
     if not new and not current_user.is_admin:
         # Make sure user has permission to edit
         if institution["admin"].lower() != current_user.email.lower():
-            rec = userdb.lookup(institution["admin"], "full_name")
+            rec = userdb.lookup(institution["admin"])
             link = rec["homepage"] if rec["homepage"] else "mailto:%s" % rec["email"]
             owner = "%s (%s)" % (rec['name'], link)
             flash_error(

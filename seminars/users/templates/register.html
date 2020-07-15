@@ -1,12 +1,19 @@
 {% extends 'homepage.html' %}
 {% block content %}
 
-Each registered user should be an <i>individual</i>, not an organization or a group of people, 
+<p>
+Each registered user should be an <i>individual</i>, 
+not an organization or a group of people, 
 so the email address below should be associated to an individual.
-(Seminar email addresses or aliases may be associated with a seminar later.)
-<br><br>
-Before registering, you are encouraged to read the site's <a href="{{ url_for('policies') }}" target="_blank">policies</a> 
-and in particular the <a href="{{ url_for('privacy') }}" target="_blank">privacy policy</a>.
+(An email address for a conference or seminar series can be added later,
+when adding the event to our site.)
+</p>
+<p>
+Before registering, you are encouraged to read 
+the site's <a href="{{ url_for('policies') }}" target="_blank">policies</a> 
+and in particular 
+the <a href="{{ url_for('privacy') }}" target="_blank">privacy policy</a>.
+</p>
 
 <h1>Register</h1>
 
@@ -14,43 +21,32 @@ and in particular the <a href="{{ url_for('privacy') }}" target="_blank">privacy
   <table>
     <tr>
       <td>Email:</td>
-      <td><input name="email" size="30" value="{{ email }}" /></td>
+      <td><input name="email" size="30" value="{{ email }}" required /></td>
       <td colspan="2" class="forminfo">By default, not visible to others.</td></tr>
     <tr>
-      <td colspan="2" class="spacing" /></tr>
-    <tr><td colspan="2" class="forminfo" />Don't use a password that you use elsewhere!</tr>
-    <tr>
       <td>Password:</td>
-      <td><input id="pw1" name="password1" type="password" size="30"/></td>
-      <td class="forminfo" id="pw1status" style="color: {{color.red}};"></td></tr>
+      <td><input id="pw1" name="password1" type="password" size="30" required /></td>
+      <td class="forminfo" id="pw1status"></td></tr>
     </tr>
     <tr>
       <td>Password (repeat):</td>
-      <td><input id="pw2" name="password2" type="password" size="30"/></td>
-      <td class="forminfo" id="pw2status" style="color: {{color.red}};"></td></tr>
+      <td><input id="pw2" name="password2" type="password" size="30" required /></td>
+      <td class="forminfo" id="pw2status"></td></tr>
     </tr>
-
-    <tr>
-      <td colspan="2" class="spacing" /></tr>
-    <tr>
       <td></td>
-      <td>
-      <button name="submit" type="submit">Register</button>
-      </td>
+      <td><button class="save" name="submit" type="submit">Register</button></td>
     </tr>
   </table>
 </form>
 
-
 <script type="text/javascript">
-// this tells the user if the passwords match
-$(function () {
+document.addEventListener("DOMContentLoaded", function() {
+  /* checkpw() is defined in static/seminars.js and handles warning messages and colors */
   $("#pw1").keyup(function(evt) { evt.preventDefault(); checkpw(); });
   $("#pw2").keyup(function(evt) { evt.preventDefault(); checkpw(); });
   checkpw();
-})
+});
 </script>
-
 
 {% endblock %}
 

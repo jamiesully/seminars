@@ -15,11 +15,20 @@ from flask import (
     abort,
 )
 from flask_mail import Mail, Message
+from flask_cors import CORS
 
 from lmfdb.logger import logger_file_handler
-from seminars.utils import topics, restricted_topics, subject_pairs, top_menu, languages_dict, topdomain
+from seminars.utils import (
+    domain,
+    top_menu,
+    topdomain,
+    url_for_with_args,
+)
+from seminars.topic import topic_dag
+from seminars.language import languages
+from seminars.toggle import toggle, toggle3way
 from seminars.knowls import static_knowl
-from .seminar import seminars_header
+from .seminar import series_header
 from .talk import talks_header
 
 SEMINARS_VERSION = "Seminars Release 0.1"
@@ -43,6 +52,10 @@ mail_settings = {
 
 app.config.update(mail_settings)
 mail = Mail(app)
+
+
+# Enable cross origin for fonts
+CORS(app, resources={r"/fontawesome/webfonts/*": {"origins": "*"}, r"/api/*": {"origins": "*"}})
 
 ############################
 # App attribute functions  #
@@ -76,11 +89,15 @@ app.logger.addHandler(logger_file_handler())
 if app.debug:
     try:
         from flask_debugtoolbar import DebugToolbarExtension
-
         app.config["SECRET_KEY"] = """shh, it's a secret"""
         toolbar = DebugToolbarExtension(app)
     except ImportError:
         pass
+
+# secret key, necessary for sessions and tokens
+# sessions are in turn necessary for users to login
+from lmfdb.utils.config import get_secret_key
+app.secret_key = get_secret_key()
 
 # tell jinja to remove linebreaks
 app.jinja_env.trim_blocks = True
@@ -114,7 +131,7 @@ def ctx_proc_userdata():
     # meta_description appears in the meta tag "description"
     data[
         "meta_description"
-    ] = r"Welcome to {topdomain}, a listing of research seminars and conferences!".format(topdomain = topdomain())
+    ] = r"Welcome to {topdomain}, a list of research seminars and conferences!".format(topdomain = topdomain())
     data[
         "feedbackpage"
     ] = r"https://docs.google.com/forms/d/e/1FAIpQLSdJNJ0MwBXzqZleN5ibAI9u1gPPu9Aokzsy08ot802UitiDRw/viewform"
@@ -123,16 +140,18 @@ def ctx_proc_userdata():
     # debug mode?
     data["DEBUG"] = is_debug_mode()
 
-    data["topics"] = topics()
-    data["user_topics"] = restricted_topics
-    data["subjects"] = subject_pairs()
     data["top_menu"] = top_menu()
 
     data["talks_header"] = talks_header
-    data["seminars_header"] = seminars_header
-    data["languages_dict"] = languages_dict()
+    data["series_header"] = series_header
     data["static_knowl"] = static_knowl
+    data["domain"] = domain()
     data["topdomain"] = topdomain()
+    data["toggle"] = toggle
+    data["toggle3way"] = toggle3way
+    data["topic_dag"] = topic_dag
+    data["languages"] = languages
+    data["url_for_with_args"] = url_for_with_args
 
     return data
 
@@ -188,9 +207,14 @@ def netloc_redirect():
     """
 
     urlparts = urlparse(request.url)
-
-    if urlparts.netloc in ["beantheory.org", "www.mathseminars.org"]:
-        replaced = urlparts._replace(netloc="mathseminars.org", scheme="https")
+    # *beantheory.org, *mathseminars.org, *rsem.org -> *researchseminars.org
+    for otherdomain in ["beantheory.org", "mathseminars.org", "rsem.org"]:
+        if urlparts.netloc.endswith(otherdomain):
+            newnetloc = urlparts.netloc[:-len(otherdomain)] + "researchseminars.org"
+            replaced = urlparts._replace(netloc=newnetloc, scheme="https")
+            return redirect(urlunparse(replaced), code=301)
+    if urlparts.netloc == "www.researchseminars.org":
+        replaced = urlparts._replace(netloc="researchseminars.org", scheme="https")
         return redirect(urlunparse(replaced), code=301)
 
 
@@ -204,7 +228,7 @@ def not_found_404(error):
     messages = (
         error.description if isinstance(error.description, (list, tuple)) else (error.description,)
     )
-    return render_template("404.html", title="Page Not Found", messages=messages), 404
+    return render_template("404.html", title="Page not found", messages=messages), 404
 
 
 @app.errorhandler(500)
@@ -239,10 +263,10 @@ def alive():
         abort(503)
 
 
-@app.route("/acknowledgment")
+@app.route("/acknowledgments")
 def acknowledgment():
     return render_template(
-        "acknowledgment.html", title="Acknowledgments", section="Info", subsection="acknowledgments"
+        "acknowledgments.html", title="Acknowledgments", section="Info", subsection="acknowledgments"
     )
 
 
@@ -254,7 +278,7 @@ def contact():
 
 @app.route("/robots.txt")
 def robots_txt():
-    if "mathseminars.org" in request.url_root.lower():
+    if "researchseminars.org" in request.url_root.lower():
         fn = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "robots.txt")
         if os.path.exists(fn):
             return open(fn).read()
@@ -264,7 +288,7 @@ def robots_txt():
 # geeky pages have humans.txt
 @app.route("/humans.txt")
 def humans_txt():
-    return render_template("acknowledgment.html", title="Acknowledgments")
+    return render_template("acknowledgments.html", title="Acknowledgments")
 
 
 def routes():

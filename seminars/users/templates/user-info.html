@@ -2,6 +2,7 @@
 {% block content %}
 
 {% if not user.is_authenticated %}
+
   <h1>You are not logged in</h1>
 
   <div style="margin-bottom: 20px">New user?
@@ -17,18 +18,23 @@
           <td><input name="password" type="password" /></td>
           <td> (<a href="{{ url_for('.reset_password') }}">Forgot password?</a>) </td>
       </tr>
-      <tr><td class="spacing" colspan="2"/></tr>
-      <tr><td /><td><button name="submit" type="submit">Login</button></td></tr>
+      <tr>
+        <td></td>
+        <td><button class="save" name="submit" type="submit">Login</button></td>
+      </tr>
     </table>
   </form>
+
 {% else %}
-<h1>Welcome {{ user.name }} (<a href="{{ url_for(".logout") }}">logout</a>)</h1>
+  <form action="{{ url_for('.logout') }}" method="POST" name="logout">
+  <h2>Welcome, {{ user.name }} <div style="float: right; margin-right: 50px"><button class="side-cancel" name="submit" type="submit">Logout</button></div></h2>
+  </form>
   <h3> Favorite series </h3>
   <div style="margin-left: 1em;">
   <table class='ntdata'>
     <thead>
       <tr>
-        {{ seminars_header() | safe }}
+        {{ series_header() | safe }}
       </tr>
     </thead>
     {% for seminar in user.seminars: %}
@@ -54,47 +60,56 @@
   </table>
   </div>
   {%  if not user.email_confirmed  %}
-  <p>
-    Please confirm your email to get access to your personalized calendar.
-  </p>
+    <p>Please confirm your email to get access to your personalized calendar.</p>
   {% else %}
     {{ calendar_block('favorites', user) }}
   {% endif %}
 
   {% if user.is_creator %}
-  <h2>Adding content</h2>
-  <p>
-    To add content or manage the series that you organize, use the <a href="{{ url_for('create.index') }}">Manage</a> tab in the top menu.
-  </p>
-  <h2>Endorse someone to add content</h2>
+    <h2>Adding content</h2>
+    <p>
+      To add content or manage the series that you organize, use the <a href="{{ url_for('create.index') }}">Manage</a> tab in the top menu.
+    {% if user.is_creator and user.api_access %}
+        Users who wish to write scripts to add content to our site
+        or to retrieve content automatically 
+        may do so via our application programming interface (API);
+        see the <a href="{{ url_for('api.help') }}">API documentation</a> 
+        for details.
+    {% endif %}
+    </p>
 
-    <form action="{{ url_for('.get_endorsing_link') }}" method="post" name="endorse">
-    <table>
-      <tr>
-        <td style="width:75px;">
-          Email
-        </td>
-        <td>
-          <input name="email" size="30" tabindex="1" />
-        </td>
-        <td>
-          <button type="submit" tabindex="2">Endorse</button>
-        </td>
-      </tr>
-    </table>
+    <h2>Endorse someone to add content</h2>
+
+    <form name="endorse" action="{{ url_for('.get_endorsing_link') }}" method="post" name="endorse">
+      <table>
+        <tr>
+          <td width="160">
+            Email to endorse
+          </td>
+          <td>
+            <input name="email" style="width:334px;" tabindex="1" required />
+          </td>
+          <td>
+            <button type="submit" tabindex="2">Endorse</button>
+          </td>
+        </tr>
+      </table>
     </form>
     {{ session.pop('endorsing link', '') | safe }}
   {% endif %}
+
   <h2>Edit my details</h2>
+
   <form action="{{ url_for('.set_info') }}" method="post" name="userinfo">
     <table>
       <tr>
-        <td>Created</td>
+        <td width="160">Created</td>
         <td>{{ user.created|fmtdatetime }}</td>
+        <td></td>
       </tr>
       <tr>
         <td>Email</td>
-        <td><input name="email" value="{{user.email}}" size="30" tabindex="1" /></td>
+        <td><input name="email" value="{{user.email}}" style="width:334px;" tabindex="1" required/></td>
         {% if not user.email_confirmed %}
         <td>
           (not yet confirmed <a href="{{ url_for('.resend_confirmation_email') }}">Resend link?</a>)
@@ -103,24 +118,24 @@
       </tr>
       <tr>
         <td>Name</td>
-        <td><input name="name" value="{{user.name}}" size="30" tabindex="1" /></td>
-        <td/>
+        <td><input name="name" value="{{user.name}}" style="width:334px;" tabindex="1" required/></td>
+        <td></td>
       </tr>
       <tr>
         <td>Affiliation</td>
-        <td><input name="affiliation" value="{{user.affiliation}}" size="30" tabindex="1" /></td>
-        <td/>
+        <td><input name="affiliation" value="{{user.affiliation}}" style="width:334px;"tabindex="1"/></td>
+        <td></td>
       </tr>
       <tr>
         <td>Homepage</td>
-        <td><input name="homepage" id="url" value="{{user.homepage}}" size="30" tabindex="3" placeholder="https://upan.edu/~someone"/></td>
-        {% if not user.homepage %} <td class=forminfo> Entering your homepage ensures your email is never visible (use https if possible).</td> {% endif %}
+        <td><input name="homepage" id="homepage" value="{{user.homepage}}" style="width:334px;" tabindex="1" placeholder="https://upan.edu/~someone"/></td>
+        <td class=forminfo id="homepage_test"></td>
       </tr>
       <tr>
-        <td>Timezone</td>
+        <td>Time zone</td>
         <td>
-          <select name="timezone" style="width:356px;">
-            {% for tz, pretty_tz in [('', 'Browser time zone')] + timezones %}
+          <select name="timezone" style="width:344px;">
+            {% for tz, pretty_tz in [('', 'Browser time zone')] + options["timezones"] %}
             <option value="{{tz}}"
                     {% if tz == user.raw_timezone %}
                     selected=true
@@ -131,14 +146,29 @@
             {% endfor %}
           </select>
         </td>
+        <td></td>
       </tr>
-
-
-      <tr><td colspan="3" class="spacing" /></tr>
+      {% for r in options["author_ids"] %}
+        <tr id="{{r["name"]}}" style="display:none">
+          <td>{{r["display_name"]}}</td>
+          <td><input name="{{r['name']+'_value'}}" id="{{r['name']+'_value'}}" value="" style="width:334px;" tabindex="1" placeholder="{{r['placeholder']}}"/></td>
+          <td class="forminfo" id="{{r['name']+'_test'}}"></td>
+        </tr>
+      {% endfor %}
       <tr>
-        <td/><td colspan="2">
-          <button type="submit" tabindex="5">Update details</button>
+        <td>{{KNOWL("ids")}}</td><td>
+        <select id="ids" name="ids" style="width:344px;">
+          <option value="" selected>add ID (select type)</option>
+          {% for r in options["author_ids"] %}
+            <option value="{{ r["name"] }}">{{r["display_name"]}}</option>
+          {% endfor %}
+        </select>
         </td>
+        <td></td>
+      </tr>
+      <tr>
+        <td></td>
+        <td colspan="2"><button class="save" type="submit" tabindex="3">Update details</button></td>
       </tr>
 
     </table>
@@ -147,58 +177,86 @@
   <h2>Change password</h2>
 
   <form action="{{ url_for('.change_password') }}" method="POST" name="changepassword">
-   <table>
-    <tr>
-     <td>Old password</td>
-     <td><input name="oldpwd" type="password" style="width:260px;"/></td>
-     <tr><td colspan="2" class="forminfo" />Don't use a password that you use elsewhere!</tr>
-     <tr><td>New password</td>
-         <td><input id="pw1" name="password1" type="password" style="width:260px;"/></td>
-         <td class="forminfo" id="pw1status" style="color: {{color.red}};"></td></tr>
-     </tr>
-     <tr><td>New password (repeat)</td>
-         <td><input id="pw2" name="password2" type="password" style="width:260px;"/></td>
-         <td class="forminfo" id="pw2status" style="color: {{color.red}};"></td></tr>
-    <tr>
-     <tr><td colspan="2" class="spacing" /></tr>
-     <tr><td/>
-         <td><button name="submit" type="submit">Change Password</button></td>
-    </tr>
-   </table>
+    <table>
+      <tr>
+         <td width="160">Old password</td>
+         <td><input name="oldpwd" type="password" style="width:334px;" required /></td>
+         <td class="forminfo"></td>
+      </tr>
+      <tr>
+        <td>New password</td>
+        <td><input id="pw1" name="password1" type="password" style="width:334px;" required /></td>
+        <td class="forminfo" id="pw1status"></td>
+      </tr>
+      <tr>
+        <td>New password (repeat)</td>
+        <td><input id="pw2" name="password2" type="password" style="width:334px;" required /></td>
+        <td class="forminfo" id="pw2status"></td>
+      </tr>
+      <tr>
+        <td></td>
+        <td><button class="save" name="submit" type="submit" tabindex="4">Change password</button></td>
+      </tr>
+    </table>
   </form>
 
   <h2>Delete account</h2>
 
-<p> Deleting your account will remove all personal information about you from our database (your favorites, the "details" above, etc.), though talks and series you've created will remain.</p>
+  <p> Deleting your account will remove all personal information about you from our database (your favorites, the "details" above, etc.), though talks and series you've created will remain.</p>
 
-<p><a href="{{ url_for('user.permanently_deleteme') }}" onclick="return confirm('Are you sure you want to PERMANENTLY delete your account?');">Permanently delete account</a></p>
+  <p><a href="{{ url_for('user.permanently_deleteme') }}" onclick="return confirm('Are you sure you want to PERMANENTLY delete your account?');">Permanently delete account</a></p>
 
+  {# this script constructs a url and shows it as a link, just for testing #}
+  <script type="text/javascript">
+    document.addEventListener("DOMContentLoaded", function() {
+      function homepage_test() {
+        var url = $("#homepage").val();
+        if ( url.substring(0,7) == "http://" || url.substring(0,8) == "https://" ) {
+          $("#homepage_test").html("<a href='" + url + "' target='_blank'>test homepage link</a>");
+        } else {
+          $("#homepage_test").html("Entering your homepage ensures your email is never visible (use https if possible).");
+        }
+      }
+      $("#homepage").keyup(function(evt) { evt.preventDefault(); homepage_test()});
+      homepage_test();
 
-{# this script constructs a url and shows it as a link, just for testing #}
-<script type="text/javascript">
-function makelink() {
-   var url = $("#url").val();
-   if (url.substring(0,7) != "http://" && url.substring(0,8) != "https://") {
-     url = "http://" + url;
-   }
-   $("#urltest").html("<a href='" + url + "' target='_blank'>test</a>");
-}
+      /* checkpw() is defined in static/seminars.js and handles warning messages and colors */
+      $("#pw1").keyup(function(evt) { evt.preventDefault(); checkpw(); });
+      $("#pw2").keyup(function(evt) { evt.preventDefault(); checkpw(); });
+      checkpw();
 
-$(function() {
-   $("#url").keyup(function(evt) { evt.preventDefault(); makelink()});
-});
+      function add_id(e) {
+        e.preventDefault();
+        id_type = document.getElementById('ids').value;
+        document.getElementById(id_type).style.display = '';
+        document.getElementById('ids').value = "";
+      }
+      $('select[name="ids"]').change(add_id);
+      {% for id, val in user.external_ids %}
+        document.getElementById("{{id}}_value").value="{{val}}";
+        document.getElementById("{{id}}").style.display = '';
+      {% endfor %}
 
-makelink();
+      function author_id_test(name,display_name,regex,url) {
+        var id = document.getElementById(name+"_value").value;
+        if (id.length==0) return;
+        var re = new RegExp(regex);
+        if ( re.test(id) ) {
+          $("#"+name+"_test").html("<a href='" + url.replace("%s",id) + "' target=_blank'>test "+name+" link</a>"); // replace("%s",...) is  poor man's sprintf
+        } else {
+          $("#"+name+"_test").html("Invalid " + display_name);
+          $("#"+name+"_test").css("color", "red");
+        }
+      }
 
-/* this tells the user if the passwords match */
-$(function () {
-  $("#pw1").keyup(function(evt) { evt.preventDefault(); checkpw(); });
-  $("#pw2").keyup(function(evt) { evt.preventDefault(); checkpw(); });
-  checkpw();
-})
-</script>
+      {% for r in options["author_ids"] %}
+        $("#{{r["name"]}}_value").keyup(function(evt) {
+            evt.preventDefault(); author_id_test("{{r['name']}}","{{r['display_name']}}","{{r['regex']}}","{{r['url']}}");
+        });
+        author_id_test("{{r['name']}}","{{r['display_name']}}","{{r['regex']}}","{{r['url']}}");
+      {% endfor %}
+    });
+  </script>
+{% endif %}
 
-{%endif%}
 {% endblock %}
-
-
